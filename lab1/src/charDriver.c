@@ -30,6 +30,10 @@
 #include <asm/atomic.h>
 #include <asm/uaccess.h>
 
+// -- Configs --
+#define NB_DEVS     1
+#define DEV_NAME    "char_driver_etsmtl"
+
 // -- Infos --
 MODULE_AUTHOR("Etienne B.-Pilon");
 MODULE_LICENSE("Dual BSD/GPL");
@@ -41,3 +45,23 @@ static int cd_open(struct inode *inode, struct file *flip);
 static int cd_release(struct inode *inode, struct file *flip);
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_ops);
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_ops);
+
+// -- Variables --
+dev_t dev_num;
+int cd_minor = 0;
+
+static int __init cd_init(void){
+    int result;
+     
+    result = alloc_chrdev_region(&dev_num, cd_minor, NB_DEVS, DEV_NAME);
+    if (result < 0 ) 
+        printk(KERN_WARNING"Error allocating handle number in alloc_chrdev_region\n");
+    else
+        printk(KERN_WARNING"Char driver - Major:%u, Minor:%u\n", MAJOR(dev_num), MINOR(dev_num));
+    return 0;
+}
+
+static void __exit cd_exit(void){
+    unregister_chrdev_region(dev_num, NB_DEVS);
+    printk(KERN_WARNING"Char driver unregistered\n");
+}
