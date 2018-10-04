@@ -63,5 +63,10 @@ static int __init cd_init(void){
 
 static void __exit cd_exit(void){
     unregister_chrdev_region(dev_num, NB_DEVS);
-    printk(KERN_WARNING"Char driver unregistered\n");
+    printk(KERN_WARNING"Char driver unregistered\n")
 }
+
+module_init(cd_init);
+module_exit(cd_exit);
+
+
