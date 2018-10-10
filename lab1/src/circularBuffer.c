@@ -18,13 +18,16 @@
 
 #include "circularBuffer.h"
 
+#define NULL 0
+
 struct circ_buf_t{
     char* buffer;
-    unsigned int cursor_head;
-    unsigned int cursor_tail;
+    unsigned int cursor_in;
+    unsigned int cursor_out;
     unsigned int max_capacity;
     char is_full;
-}
+};
+
 // ---------------------
 // -------- API --------
 // ---------------------
@@ -60,20 +63,72 @@ void cbuf_free(cbuf_handle_t cbuf){
 
 void cbuf_clear(cbuf_handle_t cbuf){
     if (cbuf == NULL) return;
-    cbuf->cursor_head = 0;
-    cbuf->cursor_tail = 0;
+    cbuf->cursor_in = 0;
+    cbuf->cursor_out = 0;
     cbuf->is_full = 0;
 }
+char cbuf_is_full(cbuf_handle_t cbuf){
+    if (cbuf == NULL) return 0;
+    return cbuf->is_full;
+}
+char cbuf_is_empty(cbuf_handle_t cbuf){
+    if (cbuf == NULL) return 0;
+    return (!cbuf->is_full && cbuf->cursor_in == cbuf->cursor_out);
+}
+unsigned int cbuf_current_size(cbuf_handle_t cbuf){
+    if (cbuf == NULL) return 0;
+    if (cbuf == NULL) return 0;
+    unsigned int current_size = 0;
+    if (cbuf->is_full) {
+        current_size = cbuf->max_capacity;
+    } else if (cbuf->cursor_in >= cbuf->cursor_out) {
+        current_size = cbuf->cursor_in - cbuf->cursor_out; 
+    } else {
+        current_size = cbuf->max_capacity + cbuf->cursor_in - cbuf->cursor_out;
+    }
+    return current_size;
+}
+unsigned int cbuf_max_capacity(cbuf_handle_t cbuf){
+    if (cbuf == NULL) return 0;
+    return cbuf->max_capacity;
+}
+
+static void move_cursor_in(cbuf_handle_t cbuf){
+    cbuf->cursor_in = (cbuf->cursor_in + 1) % cbuf->max_capacity;
+    cbuf->is_full = cbuf->cursor_out == cbuf->cursor_in ? 1 : 0;
+    return;
+}
+
+char cbuf_put(cbuf_handle_t cbuf, char byte){
+    if (cbuf == NULL || cbuf->is_full) return 0;
+    cbuf->buffer[cbuf->cursor_in] = byte;
+    move_cursor_in(cbuf);
+    return 1;
+}
+
+static void move_cursor_out(cbuf_handle_t cbuf, unsigned int size){
+    if (cbuf_is_empty(cbuf)) return;
+    cbuf->cursor_out = (cbuf->cursor_out + size) % cbuf->max_capacity;
+    cbuf->is_full = 0;
+    return;
+}
+
+char cbuf_pop(cbuf_handle_t cbuf, char* buffer){
+   if (cbuf == NULL || cbuf_is_empty(cbuf)) return 0;
+   *buffer = cbuf->buffer[cbuf->cursor_out];
+   move_cursor_out(cbuf, 1);
+   return 1;
+}
+
+//char cbuf_pop_block(cbuf_handle_t cbuf, char* bytes, unsigned int block_size){
+
+//}
+
+// TODO: Add a way to ask for chunks of data (8 bytes at the time)
 /*  
 // cbuf_put
 // return: 0 if full - 1 if not
-char cbuf_put(cbuf_handle_t cbuf, char byte);
 // cbuf_pop
 // return: byte count
-char cbuf_pop(cbuf_handle_t cbuf, char* bytes);
-char cbuf_is_empty(cbuf_handle_t cbuf);
-char cbuf_is_full(cbuf_handle_t cbuf);
 
-unsigned int cbuf_current_size(cbuf_handle_t cbuf);
-unsigned int cbuf_max_capacity(cbuf_handle_t cbuf);
 */
