@@ -120,15 +120,3 @@ char cbuf_pop(cbuf_handle_t cbuf, char* buffer){
    return 1;
 }
 
-//char cbuf_pop_block(cbuf_handle_t cbuf, char* bytes, unsigned int block_size){
-
-//}
-
-// TODO: Add a way to ask for chunks of data (8 bytes at the time)
-/*  
-// cbuf_put
-// return: 0 if full - 1 if not
-// cbuf_pop
-// return: byte count
-
-*/

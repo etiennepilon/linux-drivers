@@ -1,0 +1,5 @@
+# Tests
+run command from this repository
+```
+    cd test && sh run_test.sh
+```
