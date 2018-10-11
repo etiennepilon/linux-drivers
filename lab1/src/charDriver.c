@@ -22,6 +22,7 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
+#include <linux/kernel.h>
 #include <uapi/asm-generic/errno-base.h>
 #include <linux/fcntl.h>
 #include <linux/wait.h>
@@ -29,7 +30,6 @@
 #include <linux/device.h>
 #include <asm/atomic.h>
 #include <asm/uaccess.h>
-
 // -- Configs --
 #define NB_DEVS     1
 #define DEV_NAME    "char_driver_etsmtl"
@@ -47,8 +47,25 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_ops);
 
 // -- Variables --
+typedef struct cd_dev {
+    dev_t num;
+    int minor;
+    char* read_buffer;
+    char* write_buffer;
+    struct cdev cdev;
+}
 dev_t dev_num;
 int cd_minor = 0;
+
+// -- Device Struct --
+static struct file_operations cd_fops {
+    .owner = THIS_MODULE,
+//    .open = cd_open,
+//    .release = charDriver_release,
+//    .read = charDriver_read,
+//    .write = charDriver_write,
+//    .unlocked_ioctl = charDriver_ioctl,}
+}
 
 static int __init cd_init(void){
     int result;
@@ -63,7 +80,7 @@ static int __init cd_init(void){
 
 static void __exit cd_exit(void){
     unregister_chrdev_region(dev_num, NB_DEVS);
-    printk(KERN_WARNING"Char driver unregistered\n")
+    printk(KERN_WARNING"Char driver unregistered\n");
 }
 
 module_init(cd_init);
