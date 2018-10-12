@@ -18,7 +18,6 @@
 
 #include "circularBuffer.h"
 
-#define NULL 0
 
 struct circ_buf_t{
     char* buffer;
@@ -55,8 +54,10 @@ cbuf_handle_t cbuf_init(char* buf, unsigned int size){
 
 void cbuf_free(cbuf_handle_t cbuf){
 #ifdef __KERNEL__
+    kfree(cbuf->buffer);
     kfree(cbuf);
 #else
+    free(cbuf->buffer);
     free(cbuf);
 #endif
 }

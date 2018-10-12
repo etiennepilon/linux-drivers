@@ -1,5 +1,12 @@
 #ifndef CIRC_BUFFER_H
 #define CIRC_BUFFER_H
+#ifdef __KERNEL__
+    #include<linux/slab.h>
+#endif
+#ifndef NULL
+    #define NULL ((void*) 0)
+#endif
+
 typedef struct circ_buf_t circ_buf_t;
 typedef circ_buf_t* cbuf_handle_t;
 
