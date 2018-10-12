@@ -3,9 +3,15 @@
 KERNEL_DIRS 	:=	/lib/modules/$(shell uname -r)/build
 PWD				:=  $(shell pwd)
 
-obj-m		= charDriver.o
-#lab1-objs	:= charDriver.o #Add objects here
+SRCS = charDriver.c circularBuffer.c
+OBJS = $(SRCS:.c=.o)
+obj-m := lab1.o
+lab1-objs := $(OBJS)
 
 all:
-	@make -C $(KERNEL_DIRS) M=$(PWD) modules
+	$(MAKE) -C $(KERNEL_DIRS) M=$(PWD) modules
+
+clean:
+	$(MAKE) -C $(KERNEL_DIRS) M=$(PWD) clean
+	$(RM) Module.markers modules.order
 
