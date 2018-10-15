@@ -107,6 +107,11 @@ char cbuf_put(cbuf_handle_t cbuf, char byte){
     return 1;
 }
 
+unsigned int cbuf_free_space_count(cbuf_handle_t cbuf){
+    if(cbuf_is_empty(cbuf)) return cbuf->max_capacity;
+    return cbuf->max_capacity - cbuf_current_size(cbuf);
+}
+
 static void move_cursor_out(cbuf_handle_t cbuf, unsigned int size){
     if (cbuf_is_empty(cbuf)) return;
     cbuf->cursor_out = (cbuf->cursor_out + size) % cbuf->max_capacity;
@@ -120,4 +125,3 @@ char cbuf_pop(cbuf_handle_t cbuf, char* buffer){
    move_cursor_out(cbuf, 1);
    return 1;
 }
-
