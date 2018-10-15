@@ -35,7 +35,7 @@
 // -- Configs --
 #define NB_DEVS     1
 #define DEV_NAME    "char_driver_etsmtl"
-#define BUFFER_SIZE 256
+#define DEF_BUFFER_SIZE 256
 #define DEBUG 1
 #define TEST 1
 #define MAX_WRITER 1
@@ -63,7 +63,8 @@ static int cd_open(struct inode *inode, struct file *flip);
 static int cd_release(struct inode *inode, struct file *flip);
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_pos);
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_pos);
-//TODO: static struct ioctl
+static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg);
+
 // -- Variables --
 
 static dev_t dev_num;
@@ -71,8 +72,8 @@ static int cd_minor = 0;
 static struct class* cd_class;
 static struct cdev cd_cdev;
 static int number_opens = 0;
-static char read_buffer[BUFFER_SIZE];
-static char write_buffer[BUFFER_SIZE];
+static char read_buffer[DEF_BUFFER_SIZE];
+static char write_buffer[DEF_BUFFER_SIZE];
 static cd_dev* _dev;
 
 // -- Device Struct --
@@ -81,7 +82,8 @@ static struct file_operations cd_fops = {
     .open = cd_open,
     .release = cd_release,
     .read = cd_read,
-    .write = cd_write
+    .write = cd_write,
+    .unlocked_ioctl = cd_ioctl
 };
 // -- Private methods --
 static cd_dev* cd_dev_create(void){
@@ -93,19 +95,20 @@ static cd_dev* cd_dev_create(void){
         return NULL;
     }
     /* Init buffers */
-    read_buffer = kmalloc(sizeof(char)*BUFFER_SIZE, GFP_KERNEL);
-    write_buffer = kmalloc(sizeof(char)*BUFFER_SIZE, GFP_KERNEL);
+    read_buffer = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
+    write_buffer = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
     if(read_buffer == NULL || write_buffer == NULL){
         D printk(KERN_WARNING"Error initializing buffers (%s:%s:%u)\n", __FILE__, __FUNCTION__, __LINE__);
         return NULL;
     }
-    dev->reader_cbuf = cbuf_init(read_buffer, BUFFER_SIZE);
-    dev->writer_cbuf = cbuf_init(write_buffer, BUFFER_SIZE);
+    dev->reader_cbuf = cbuf_init(read_buffer, DEF_BUFFER_SIZE);
+    dev->writer_cbuf = cbuf_init(write_buffer, DEF_BUFFER_SIZE);
     if(dev->reader_cbuf == NULL || dev->writer_cbuf == NULL) 
     {
         D printk(KERN_WARNING"Error initializing circ buffers (%s:%s:%u)\n", __FILE__, __FUNCTION__, __LINE__);
         return -1;
     }
+    dev->buffer_size = DEF_BUFFER_SIZE;
     dev->num_reader = 0;
     dev->num_writer = 0;
     sema_init(&dev->sem, NB_DEVS);
@@ -266,7 +269,7 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
     // TODO: Must put Serial port in tx mode right away
     if(flip->f_flags & O_NONBLOCK)
     {
-        buffer_size = count < BUFFER_SIZE? count: BUFFER_SIZE;
+        buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
         copy_from_user(write_buffer, ubuf, buffer_size);
         if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
         for (i = 0; i < buffer_size; i ++) {
@@ -281,7 +284,7 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
     else
     {
         // TODO: Add blocking call when count != cbuf_current_size
-        buffer_size = count < BUFFER_SIZE? count: BUFFER_SIZE;
+        buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
         copy_from_user(write_buffer, ubuf, buffer_size);
         if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
         for (i = 0; i < buffer_size; i ++) {
@@ -294,6 +297,41 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
         up(&_dev->sem);
     }
     return write_count;
+}
+static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
+    int err = 0, retval = 0, new_size = 0;
+    if(_IOC_TYPE(cmd) != CD_IOCTL_MAGIC || _IOC_NR(cmd) > CD_IOCTL_MAX) return -ENOTTY;
+    if(_IOC_DIR(cmd) & _IOC_READ) 
+        err = !access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
+    if(_IOC_DIR(cmd) & _IOC_WRITE) 
+        err = !access_ok(VERIFY_READ, (void __user*)arg, _IOC_SIZE(cmd));
+    if (err) return -EFAULT;
+    switch(cmd){
+        case CD_IOCTL_SETBAUDRATE:
+            // TODO
+            break;
+        case CD_IOCTL_SETDATASIZE:
+            break;
+        case CD_IOCTL_SETPARTIY:
+            // TODO
+            break;
+        case CD_IOCTL_GETBUFSIZE:
+            retval = __put_user(_dev->buffer_size, (int __user*) arg); 
+            break;
+        case CD_IOCTL_SETBUFSIZE:
+            if (!capable(CAP_SYS_ADMIN)) return -EPERM;
+            retval = __get_user(new_size, (int __user*) arg);
+            if (retval < 0) return retval;
+            if (new_size < 128 || new_size > 4096) return -ENOTTY;
+            retval = cbuf_resize(_dev->reader_cbuf, new_size);
+            if (retval < 0) return retval;
+            retval = cbuf_resize(_dev->writer_cbuf, new_size);
+            if (retval < 0) return retval;
+            _dev->buffer_size = new_size;
+            break;
+        default: return -ENOTTY;
+    }
+    return retval;
 }
 
 module_init(cd_init);
