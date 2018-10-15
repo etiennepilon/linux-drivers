@@ -26,6 +26,7 @@ unsigned int cbuf_free_space_count(cbuf_handle_t cbuf);
 char cbuf_pop(cbuf_handle_t cbuf, char* bytes);
 char cbuf_is_empty(cbuf_handle_t cbuf);
 char cbuf_is_full(cbuf_handle_t cbuf);
+int cbuf_resize(cbuf_handle_t cbuf, int size);
 
 unsigned int cbuf_current_size(cbuf_handle_t cbuf);
 unsigned int cbuf_max_capacity(cbuf_handle_t cbuf);

@@ -125,3 +125,21 @@ char cbuf_pop(cbuf_handle_t cbuf, char* buffer){
    move_cursor_out(cbuf, 1);
    return 1;
 }
+
+int cbuf_resize(cbuf_handle_t cbuf, int size){
+    if(cbuf == NULL || size < 0) return -1;
+    if(cbuf_current_size(cbuf) >= size) return -1;
+#ifdef __KERNEL__
+    char* new_buffer = kmalloc(sizeof(char) * size, GFP_KERNEL);
+    memcpy(new_buffer, cbuf->buffer, cbuf_current_size(cbuf));
+    kfree(cbuf->buffer);
+    cbuf->buffer = new_buffer;
+#else
+    char* new_buffer = malloc(sizeof(char) * size);
+    memcpy(new_buffer, cbuf->buffer, cbuf_current_size(cbuf));
+    free(cbuf->buffer);
+    cbuf->buffer = new_buffer;
+#endif
+    return 0;
+}
+
