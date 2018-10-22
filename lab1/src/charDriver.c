@@ -71,7 +71,6 @@ static dev_t dev_num;
 static int cd_minor = 0;
 static struct class* cd_class;
 static struct cdev cd_cdev;
-static int number_opens = 0;
 static char read_buffer[DEF_BUFFER_SIZE];
 static char write_buffer[DEF_BUFFER_SIZE];
 static cd_dev* _dev;
@@ -99,6 +98,7 @@ static cd_dev* cd_dev_create(void){
     write_buffer = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
     if(read_buffer == NULL || write_buffer == NULL){
         D printk(KERN_WARNING"Error initializing buffers (%s:%s:%u)\n", __FILE__, __FUNCTION__, __LINE__);
+        kfree(dev);
         return NULL;
     }
     dev->reader_cbuf = cbuf_init(read_buffer, DEF_BUFFER_SIZE);
@@ -106,8 +106,10 @@ static cd_dev* cd_dev_create(void){
     if(dev->reader_cbuf == NULL || dev->writer_cbuf == NULL) 
     {
         D printk(KERN_WARNING"Error initializing circ buffers (%s:%s:%u)\n", __FILE__, __FUNCTION__, __LINE__);
-        return -1;
+        kfree(dev);
+        return NULL;
     }
+    init_waitqueue_head(&dev->wait_queue);
     dev->buffer_size = DEF_BUFFER_SIZE;
     dev->num_reader = 0;
     dev->num_writer = 0;
@@ -224,42 +226,38 @@ static int cd_release(struct inode *inode, struct file *flip){
        default:
            break;
    }
-out:
+//out:
    up(&_dev->sem);
    return 0;
 }
 
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_pos){
-    int read_count = 0, i = 0;
+    int read_count = 0, i = 0, buf_size = 0, blocking = 0;
     
     if(_dev == NULL) return -ENOENT; 
-    if(flip->f_flags & O_NONBLOCK)
+    if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+    blocking = !(flip->f_flags & O_NONBLOCK);
+    if (blocking)
     {
-        if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
-        int buf_size = (int)cbuf_current_size(_dev->reader_cbuf);
-        read_count = count < buf_size ? count : buf_size;
-        for(i = 0; i < read_count; i ++)
+        while(cbuf_current_size(_dev->reader_cbuf) < count)
         {
-           cbuf_pop(_dev->reader_cbuf, read_buffer + i); 
-        } 
-        up(&_dev->sem);
+            up(&_dev->sem);
+            if(wait_event_interruptible(
+                _dev->wait_queue,
+                (cbuf_current_size(_dev->reader_cbuf) >= count)
+                )) return -ERESTARTSYS;
+            if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+        }
     }
-    else
+    buf_size = (int)cbuf_current_size(_dev->reader_cbuf);
+    read_count = count < buf_size ? count : buf_size;
+    for(i = 0; i < read_count; i ++)
     {
-        // TODO: Block if read_count != count
-        // current_size()!=count -> wait
-        // This isn't the appropriate behaviour
-        // How do I block users?
-        if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
-        int buf_size = (int)cbuf_current_size(_dev->reader_cbuf);
-        read_count = count < buf_size ? count : buf_size;
-        for(i = 0; i < read_count; i ++)
-        {
-           cbuf_pop(_dev->reader_cbuf, read_buffer + i); 
-        } 
-        up(&_dev->sem);
-    }
+        // TODO: Catch error
+       cbuf_pop(_dev->reader_cbuf, read_buffer + i); 
+    } 
     copy_to_user(ubuf, read_buffer, read_count);
+    up(&_dev->sem);
     return (ssize_t)read_count;
 }
 
@@ -323,11 +321,14 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
             retval = __get_user(new_size, (int __user*) arg);
             if (retval < 0) return retval;
             if (new_size < 128 || new_size > 4096) return -ENOTTY;
+            if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
             retval = cbuf_resize(_dev->reader_cbuf, new_size);
-            if (retval < 0) return retval;
+            if (retval < 0) goto outsem;
             retval = cbuf_resize(_dev->writer_cbuf, new_size);
-            if (retval < 0) return retval;
+            if (retval < 0) goto outsem;
             _dev->buffer_size = new_size;
+outsem:
+            up(&_dev->sem);
             break;
         default: return -ENOTTY;
     }
@@ -336,5 +337,3 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
 
 module_init(cd_init);
 module_exit(cd_exit);
-
-
