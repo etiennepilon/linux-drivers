@@ -33,13 +33,18 @@
 #include "charDriver.h"
 #include "circularBuffer.h"
 // -- Configs --
-#define NB_DEVS     1
-#define DEV_NAME    "char_driver_etsmtl"
+#define NB_DEVS     2
+#define DEV_NAME    "etsmtl_serial"
 #define DEF_BUFFER_SIZE 256
 #define DEBUG 1
 #define TEST 1
 #define MAX_WRITER 1
 #define MAX_READER 1
+
+#define PORT0_IRQ 20
+#define PORT0_BASE_ADDR 0xc020
+#define PORT1_IRQ 21
+#define PORT1_BASE_ADDR 0xc030
 
 #ifdef DEBUG
     #define D if(1)
@@ -64,16 +69,22 @@ static int cd_release(struct inode *inode, struct file *flip);
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_pos);
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_pos);
 static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg);
-
+// -- Serial prototypes --
+// static serial_irq(whatever);
+//TODO: Manage two handles (Create two class)
+//  each class should have their dev
 // -- Variables --
 
 static dev_t dev_num;
 static int cd_minor = 0;
-static struct class* cd_class;
+static struct class* cd_class0;
+static struct class* cd_class1;
 static struct cdev cd_cdev;
 static char read_buffer[DEF_BUFFER_SIZE];
 static char write_buffer[DEF_BUFFER_SIZE];
-static cd_dev* _dev;
+//static cd_dev* _dev;
+static cd_dev* _dev_0;
+static cd_dev* _dev_1;
 
 // -- Device Struct --
 static struct file_operations cd_fops = {
@@ -84,8 +95,37 @@ static struct file_operations cd_fops = {
     .write = cd_write,
     .unlocked_ioctl = cd_ioctl
 };
+
+static int get_irq_for_minor(int minor)
+{
+    if (minor == 0) return PORT0_IRQ;
+    if (minor == 1) return PORT1_IRQ;
+    D printk(KERN_WARNING"Missing IRQ configs for minor: %u\n", minor);
+    return -1;
+}
+
+static int get_base_address_for_minor(int minor)
+{
+    if (minor == 0) return PORT0_BASE_ADDR;
+    if (minor == 1) return PORT1_BASE_ADDR;
+    D printk(KERN_WARNING"Missing Base address configs for minor: %u\n", minor);
+    return -1;
+}
+
+static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
+{
+    dev->serial.baud_rate = BAUD_RATE;
+    dev->serial.parity_select = 0;
+    dev->serial.parity_enabled= 0;
+    dev->serial.stop_bit = 0;
+    dev->serial.word_len_selection=WLEN_8;
+    dev->serial.base_address = base_address;
+    dev->serial.irq_num = irq_num;
+    return;
+}
+
 // -- Private methods --
-static cd_dev* cd_dev_create(void){
+static cd_dev* cd_dev_create(int irq_num, int base_address){
     char *read_buffer, *write_buffer;
     cd_dev* dev;
     dev = kmalloc(sizeof(cd_dev), GFP_KERNEL);
@@ -113,7 +153,8 @@ static cd_dev* cd_dev_create(void){
     dev->buffer_size = DEF_BUFFER_SIZE;
     dev->num_reader = 0;
     dev->num_writer = 0;
-    sema_init(&dev->sem, NB_DEVS);
+    init_serial_port(dev, irq_num, base_address);
+    sema_init(&dev->sem, 1);
     return dev;
 }
 
@@ -123,6 +164,8 @@ static void cd_dev_destroy(cd_dev* dev){
     cbuf_free(dev->writer_cbuf);
     kfree(dev);
 }
+
+// TODO: Wait event queue with timeout to test in/out of serial port
 // -- File operations --
 static int __init cd_init(void){
     int result;
@@ -131,12 +174,13 @@ static int __init cd_init(void){
     if (result < 0 ) {
         D printk(KERN_WARNING"Error allocating handle number in alloc_chrdev_region\n");
         return result;
-    } else {
-        printk(KERN_WARNING"Char driver - Major:%u, Minor:%u\n", MAJOR(dev_num), MINOR(dev_num));
-    }
+    } 
     // -- Create device handle --
-    cd_class = class_create(THIS_MODULE, "cdClass");
-    device_create(cd_class, NULL/*no parent*/, dev_num, NULL, DEV_NAME);
+    cd_class0 = class_create(THIS_MODULE, "serialClass0");
+    device_create(cd_class0, NULL/*no parent*/, dev_num, NULL, "etsmtl_0");
+    cd_class1 = class_create(THIS_MODULE, "serialClass1");
+    device_create(cd_class1, NULL/*no parent*/, dev_num + 1, NULL, "etsmtl_1");
+    
     // -- Init and add cdev with fops
     cdev_init(&cd_cdev, &cd_fops);
     cd_cdev.owner = THIS_MODULE;
@@ -145,28 +189,35 @@ static int __init cd_init(void){
         D printk(KERN_WARNING"Error adding char driver to the system");
         return result;
     }
-    _dev = cd_dev_create();
-    if(_dev == NULL) {
-        D printk(KERN_WARNING"WTF");
+//    _dev = cd_dev_create(PORT0_IRQ, PORT0_BASE_ADDR);
+    _dev_0 = cd_dev_create(PORT0_IRQ, PORT0_BASE_ADDR);
+    _dev_1 = cd_dev_create(PORT1_IRQ, PORT1_BASE_ADDR);
+    if(_dev_0 == NULL ||_dev_1 == NULL ) {
+        D printk(KERN_WARNING"Error creating device.");
+        return -ENOTTY;
     }
-    /*
-TODO: Serial interupt, addresses reservation for serial comm, Error if not successful
-     */
     return result;
 }
 
 static void __exit cd_exit(void){
+    int i = 0;
     cdev_del(&cd_cdev);
     unregister_chrdev_region(dev_num, NB_DEVS);
-    device_destroy(cd_class, dev_num);
-    class_destroy(cd_class);
-    cd_dev_destroy(_dev);
+    device_destroy(cd_class0, dev_num);
+    class_destroy(cd_class0);
+    device_destroy(cd_class1, dev_num+1);
+    class_destroy(cd_class1);
+  //  cd_dev_destroy(_dev);
+    cd_dev_destroy(_dev_0);
+    cd_dev_destroy(_dev_1);
     printk(KERN_WARNING"Char driver unregistered\n");
 }
 
 static int cd_open(struct inode *inode, struct file *flip){
     int retval = 0;
+    cd_dev* _dev = MINOR(inode->i_rdev) == 0 ? _dev_0: _dev_1;
    D printk(KERN_WARNING"charDriver opened\n");
+   
    if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
    switch((flip->f_flags & O_ACCMODE)){
        case O_RDONLY:
@@ -207,6 +258,7 @@ out:
 }
 
 static int cd_release(struct inode *inode, struct file *flip){
+    cd_dev* _dev = MINOR(inode->i_rdev) == 0 ? _dev_0: _dev_1;
    if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
    switch((flip->f_flags & O_ACCMODE)){
        case O_RDONLY:
@@ -233,7 +285,8 @@ static int cd_release(struct inode *inode, struct file *flip){
 
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_pos){
     int read_count = 0, i = 0, buf_size = 0, blocking = 0;
-    
+    cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
+    D printk(KERN_WARNING"Minor num: %u", MINOR(flip->f_inode->i_rdev));
     if(_dev == NULL) return -ENOENT; 
     if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
     blocking = !(flip->f_flags & O_NONBLOCK);
@@ -263,6 +316,7 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
 
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_pos){
     int write_count = 0, i = 0, buffer_size=0;
+    cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
     if (_dev == NULL) return -ENOENT;
     // TODO: Must put Serial port in tx mode right away
     if(flip->f_flags & O_NONBLOCK)
@@ -296,8 +350,10 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
     }
     return write_count;
 }
+
 static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
     int err = 0, retval = 0, new_size = 0;
+    cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
     if(_IOC_TYPE(cmd) != CD_IOCTL_MAGIC || _IOC_NR(cmd) > CD_IOCTL_MAX) return -ENOTTY;
     if(_IOC_DIR(cmd) & _IOC_READ) 
         err = !access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
