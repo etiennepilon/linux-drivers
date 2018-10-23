@@ -17,24 +17,47 @@
 
 // -- SERIAL --
 #define BAUD_RATE 9600
+#define SERIAL_CLK 1843200
 
 #define WLEN_5 0
 #define WLEN_6 1
 #define WLEN_7 2
 #define WLEN_8 3
 
-#define REG_RBR 0x00
-#define REG_THR 0x00
-#define REG_DLL 0x00
-#define REG_DLM 0x01
-#define REG_IER 0x01
-#define REG_IIR 0x02
-#define REG_FCR 0x02
-#define REG_LCR 0x03
-#define REG_MCR 0x04
-#define REG_LSR 0x05
-#define REG_MSR 0x06
-#define REG_SCR 0x07
+#define RBR 0x00
+#define THR 0x00
+#define DLL 0x00
+#define DLM 0x01
+#define IER 0x01
+#define IER_ETBEI 0x02
+#define IER_ERBFI 0x01
+
+#define IIR 0x02
+#define FCR 0x02
+#define FCR_RCVRTRM 0x80
+#define FCR_RCVRTRL 0x40
+#define FCR_RCVRRE 0x02
+#define FCR_FIFOEN 0x01
+
+#define LCR 0x03
+#define LCR_DLAB 0x80
+#define LCR_EPS 0x10
+#define LCR_PEN 0x08
+#define LCR_STB 0x04
+#define LCR_WLS1 0x02
+#define LCR_WLS0 0x01
+
+#define MCR 0x04
+#define LSR 0x05
+#define LSR_TEMT 0x40
+#define LSR_THRE 0x20
+#define LSR_FE 0x08
+#define LSR_PE 0x04
+#define LSR_OE 0x02
+#define LSR_DR 0x01
+
+#define MSR 0x06
+#define SCR 0x07
 
 //config: DLM/DLR et lcr
 // spin_lock for interupt
@@ -43,13 +66,13 @@
 // always keep interupt enabled
 // use inb/outb to write bytes at the address
 typedef struct {
-    int baud_rate;
+    unsigned int baud_rate;
     char parity_select;
     char parity_enabled;
     char stop_bit;
     char word_len_selection;
-    int base_address;
-    int irq_num;
+    unsigned short int base_address;
+    unsigned int irq_num;
 } serial_config;
 
 // -- DEVICE --
@@ -60,7 +83,7 @@ typedef struct {
     wait_queue_head_t wait_queue;
     unsigned int num_reader;/*Used for release*/
     unsigned int num_writer;/*Used for release*/
-    int buffer_size;
+    unsigned int buffer_size;
     struct cdev cdev;
     serial_config serial;
 } cd_dev;

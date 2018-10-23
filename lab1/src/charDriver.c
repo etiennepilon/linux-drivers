@@ -22,7 +22,7 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
-//#include <linux/kernel.h>
+#include <linux/ioport.h>
 #include <uapi/asm-generic/errno-base.h>
 #include <linux/fcntl.h>
 #include <linux/wait.h>
@@ -41,6 +41,7 @@
 #define MAX_WRITER 1
 #define MAX_READER 1
 
+#define PORT_SIZE 0x8
 #define PORT0_IRQ 20
 #define PORT0_BASE_ADDR 0xc020
 #define PORT1_IRQ 21
@@ -82,7 +83,6 @@ static struct class* cd_class1;
 static struct cdev cd_cdev;
 static char read_buffer[DEF_BUFFER_SIZE];
 static char write_buffer[DEF_BUFFER_SIZE];
-//static cd_dev* _dev;
 static cd_dev* _dev_0;
 static cd_dev* _dev_1;
 
@@ -96,20 +96,73 @@ static struct file_operations cd_fops = {
     .unlocked_ioctl = cd_ioctl
 };
 
-static int get_irq_for_minor(int minor)
+// -- SERIAL Functions --
+static int request_ports(void)
 {
-    if (minor == 0) return PORT0_IRQ;
-    if (minor == 1) return PORT1_IRQ;
-    D printk(KERN_WARNING"Missing IRQ configs for minor: %u\n", minor);
-    return -1;
+    if(!request_region(PORT0_BASE_ADDR, PORT_SIZE, "serial_0")) return -EBUSY;
+    if(!request_region(PORT1_BASE_ADDR, PORT_SIZE, "serial_1")) return -EBUSY;
+    return 0;
+}
+static void set_bit_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
+{
+    unsigned char value = inb(base_addr + offset);
+    outb(mask | value, base_addr + offset);
 }
 
-static int get_base_address_for_minor(int minor)
+static void clear_bit_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
 {
-    if (minor == 0) return PORT0_BASE_ADDR;
-    if (minor == 1) return PORT1_BASE_ADDR;
-    D printk(KERN_WARNING"Missing Base address configs for minor: %u\n", minor);
-    return -1;
+    unsigned char value = inb(base_addr + offset);
+    outb(~mask & value, base_addr + offset);
+}
+
+static void write_byte_(unsigned short int base_addr, unsigned short int offset, unsigned char byte)
+{
+    outb(byte, base_addr + offset);
+}
+
+static void write_serial_config(cd_dev *dev)
+{
+    unsigned int dl_reg_value = 0;
+    char dl_byte_buffer = 0;
+    // set parity
+    if (dev->serial.parity_enabled)
+    {
+        set_bit_(dev->serial.base_address, LCR, LCR_PEN);
+        if (dev->serial.parity_select) set_bit_(dev->serial.base_address, LCR, LCR_EPS);
+        else clear_bit_(dev->serial.base_address, LCR, LCR_EPS);
+    } else {
+        clear_bit_(dev->serial.base_address, LCR, LCR_PEN);
+    }
+    // set datasize
+    switch (dev->serial.word_len_selection)
+    {
+        case WLEN_5:
+            clear_bit_(dev->serial.base_address, LCR, LCR_WLS1 | LCR_WLS0);
+            break;
+        case WLEN_6:
+            clear_bit_(dev->serial.base_address, LCR, LCR_WLS1);
+            set_bit_(dev->serial.base_address, LCR, LCR_WLS0);
+            break;
+        case WLEN_7:
+            set_bit_(dev->serial.base_address, LCR, LCR_WLS1);
+            clear_bit_(dev->serial.base_address, LCR, LCR_WLS0);
+            break;
+        case WLEN_8:
+            set_bit_(dev->serial.base_address, LCR, LCR_WLS1 | LCR_WLS0);
+            break;
+        default:
+            set_bit_(dev->serial.base_address, LCR, LCR_WLS1 | LCR_WLS0);
+            break;
+    }
+    set_bit_(dev->serial.base_address, LCR, LCR_DLAB);
+    //Set baud
+    dl_reg_value = (unsigned int)(SERIAL_CLK / (16 * dev->serial.baud_rate));
+    // DLL
+    dl_byte_buffer = (char) (dl_reg_value & 0x00FF);
+    write_byte_(dev->serial.base_address, DLL, dl_byte_buffer);
+    dl_byte_buffer = (char) ((dl_reg_value & 0xFF00) >> 8);
+    write_byte_(dev->serial.base_address, DLM, dl_byte_buffer);
+    clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
 }
 
 static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
@@ -121,12 +174,13 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
     dev->serial.word_len_selection=WLEN_8;
     dev->serial.base_address = base_address;
     dev->serial.irq_num = irq_num;
+    //TODO: write_serial_config(dev);
     return;
 }
 
 // -- Private methods --
 static cd_dev* cd_dev_create(int irq_num, int base_address){
-    char *read_buffer, *write_buffer;
+    char *read_buf, *write_buf;
     cd_dev* dev;
     dev = kmalloc(sizeof(cd_dev), GFP_KERNEL);
     if (dev == NULL) {
@@ -134,15 +188,15 @@ static cd_dev* cd_dev_create(int irq_num, int base_address){
         return NULL;
     }
     /* Init buffers */
-    read_buffer = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
-    write_buffer = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
-    if(read_buffer == NULL || write_buffer == NULL){
+    read_buf = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
+    write_buf = kmalloc(sizeof(char)*DEF_BUFFER_SIZE, GFP_KERNEL);
+    if(read_buf == NULL || write_buf == NULL){
         D printk(KERN_WARNING"Error initializing buffers (%s:%s:%u)\n", __FILE__, __FUNCTION__, __LINE__);
         kfree(dev);
         return NULL;
     }
-    dev->reader_cbuf = cbuf_init(read_buffer, DEF_BUFFER_SIZE);
-    dev->writer_cbuf = cbuf_init(write_buffer, DEF_BUFFER_SIZE);
+    dev->reader_cbuf = cbuf_init(read_buf, DEF_BUFFER_SIZE);
+    dev->writer_cbuf = cbuf_init(write_buf, DEF_BUFFER_SIZE);
     if(dev->reader_cbuf == NULL || dev->writer_cbuf == NULL) 
     {
         D printk(KERN_WARNING"Error initializing circ buffers (%s:%s:%u)\n", __FILE__, __FUNCTION__, __LINE__);
@@ -174,7 +228,14 @@ static int __init cd_init(void){
     if (result < 0 ) {
         D printk(KERN_WARNING"Error allocating handle number in alloc_chrdev_region\n");
         return result;
-    } 
+    }
+    /* TODO: uncomment this
+    result = request_ports();
+    if (result < 0){
+        D printk(KERN_WARNING"Error requesting serial ports\n");
+        return result;
+    }
+    */
     // -- Create device handle --
     cd_class0 = class_create(THIS_MODULE, "serialClass0");
     device_create(cd_class0, NULL/*no parent*/, dev_num, NULL, "etsmtl_0");
@@ -189,7 +250,6 @@ static int __init cd_init(void){
         D printk(KERN_WARNING"Error adding char driver to the system");
         return result;
     }
-//    _dev = cd_dev_create(PORT0_IRQ, PORT0_BASE_ADDR);
     _dev_0 = cd_dev_create(PORT0_IRQ, PORT0_BASE_ADDR);
     _dev_1 = cd_dev_create(PORT1_IRQ, PORT1_BASE_ADDR);
     if(_dev_0 == NULL ||_dev_1 == NULL ) {
@@ -207,7 +267,6 @@ static void __exit cd_exit(void){
     class_destroy(cd_class0);
     device_destroy(cd_class1, dev_num+1);
     class_destroy(cd_class1);
-  //  cd_dev_destroy(_dev);
     cd_dev_destroy(_dev_0);
     cd_dev_destroy(_dev_1);
     printk(KERN_WARNING"Char driver unregistered\n");
@@ -278,7 +337,6 @@ static int cd_release(struct inode *inode, struct file *flip){
        default:
            break;
    }
-//out:
    up(&_dev->sem);
    return 0;
 }
