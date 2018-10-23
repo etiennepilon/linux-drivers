@@ -11,7 +11,7 @@
 
 #define CD_IOCTL_SETBAUDRATE _IOW(CD_IOCTL_MAGIC, 1, int) /*50-115200*/
 #define CD_IOCTL_SETDATASIZE _IOW(CD_IOCTL_MAGIC, 2, int) /*5-8*/
-#define CD_IOCTL_SETPARTIY _IOW(CD_IOCTL_MAGIC, 3, int) /*0-2*/
+#define CD_IOCTL_SETPARITY _IOW(CD_IOCTL_MAGIC, 3, int) /*0-2*/
 #define CD_IOCTL_GETBUFSIZE _IOR(CD_IOCTL_MAGIC, 4, int) /*5-8*/
 #define CD_IOCTL_SETBUFSIZE _IOW(CD_IOCTL_MAGIC, 5, int) 
 
@@ -19,10 +19,10 @@
 #define BAUD_RATE 9600
 #define SERIAL_CLK 1843200
 
-#define WLEN_5 0
-#define WLEN_6 1
-#define WLEN_7 2
-#define WLEN_8 3
+#define WLEN_5 5
+#define WLEN_6 6
+#define WLEN_7 7
+#define WLEN_8 8
 
 #define RBR 0x00
 #define THR 0x00

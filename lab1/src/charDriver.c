@@ -36,6 +36,7 @@
 #define NB_DEVS     2
 #define DEV_NAME    "etsmtl_serial"
 #define DEF_BUFFER_SIZE 256
+#define MAX_BUFFER_SIZE 2048
 #define DEBUG 1
 #define TEST 1
 #define MAX_WRITER 1
@@ -81,8 +82,8 @@ static int cd_minor = 0;
 static struct class* cd_class0;
 static struct class* cd_class1;
 static struct cdev cd_cdev;
-static char read_buffer[DEF_BUFFER_SIZE];
-static char write_buffer[DEF_BUFFER_SIZE];
+static char read_buffer[MAX_BUFFER_SIZE];
+static char write_buffer[MAX_BUFFER_SIZE];
 static cd_dev* _dev_0;
 static cd_dev* _dev_1;
 
@@ -410,7 +411,7 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
 }
 
 static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
-    int err = 0, retval = 0, new_size = 0;
+    int err = 0, retval = 0, new_size = 0, user_value = 0;
     cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
     if(_IOC_TYPE(cmd) != CD_IOCTL_MAGIC || _IOC_NR(cmd) > CD_IOCTL_MAX) return -ENOTTY;
     if(_IOC_DIR(cmd) & _IOC_READ) 
@@ -420,11 +421,39 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
     if (err) return -EFAULT;
     switch(cmd){
         case CD_IOCTL_SETBAUDRATE:
-            // TODO
+            retval = __get_user(user_value, (int __user*) arg);
+            if (retval < 0) return retval;
+            if (user_value < 50 || user_value > 115200) return -ENOTTY;
+            if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+            _dev->serial.baud_rate = user_value;
+            // TODO: write_serial_config(_dev);
+            up(&_dev->sem);
             break;
         case CD_IOCTL_SETDATASIZE:
+            retval = __get_user(user_value, (int __user*) arg);
+            if (retval < 0) return retval;
+            if (user_value < WLEN_5 || user_value > WLEN_8) return -ENOTTY;
+            if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+            _dev->serial.word_len_selection = user_value;
+            // TODO: write_serial_config(_dev);
+            up(&_dev->sem);
             break;
-        case CD_IOCTL_SETPARTIY:
+        case CD_IOCTL_SETPARITY:
+            retval = __get_user(user_value, (int __user*) arg);
+            if (retval < 0) return retval;
+            if (user_value < 0 || user_value > 2) return -ENOTTY;
+            if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+            if(user_value == 0) _dev->serial.parity_enabled = 0;
+            else if(user_value == 1){
+                _dev->serial.parity_enabled = 1;
+                _dev->serial.parity_select = 0;
+            } else {
+                _dev->serial.parity_enabled = 1;
+                _dev->serial.parity_select = 1;
+            }
+            
+            // TODO: write_serial_config(_dev);
+            up(&_dev->sem);
             // TODO
             break;
         case CD_IOCTL_GETBUFSIZE:
@@ -434,7 +463,7 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
             if (!capable(CAP_SYS_ADMIN)) return -EPERM;
             retval = __get_user(new_size, (int __user*) arg);
             if (retval < 0) return retval;
-            if (new_size < 128 || new_size > 4096) return -ENOTTY;
+            if (new_size < 128 || new_size > MAX_BUFFER_SIZE) return -ENOTTY;
             if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
             retval = cbuf_resize(_dev->reader_cbuf, new_size);
             if (retval < 0) goto outsem;
