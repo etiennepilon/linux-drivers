@@ -10,7 +10,7 @@ char write_buff[16] = "Helloooo worldss";
 
 int main(){
     int char_driver, retval=0, i = 0;
-    char_driver = open("/dev/char_driver_etsmtl", O_RDWR);
+    char_driver = open("/dev/etsmtl_1", O_RDWR);
     retval = write(char_driver, write_buff, 8);
     printf("Bytes writen: %u\n", retval);
     retval = write(char_driver, write_buff + 8, 8);

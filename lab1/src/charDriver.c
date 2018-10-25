@@ -166,6 +166,41 @@ static void write_serial_config(cd_dev *dev)
     clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
 }
 
+static void enable_serial_interupt(cd_dev* dev)
+{
+    clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
+    set_bit_(dev->serial.base_address, IER, IER_ETBEI | IER_ERBFI);
+    // Enable fifo
+    set_bit_(dev->serial.base_address, FCR, FCR_RCVRRE | FCR_FIFOEN);
+    clear_bit_(dev->serial.base_address, FCR, FCR_RCVRTRM | FCR_RCVRTRL);
+}
+/*
+static void read_port(cd_dev* dev)
+{
+    unsigned char value = inb(dev->serial.base_address + RBR);
+    cbuf_put(dev->reader_cbuf, value);
+}
+static void write_to_port(cd_dev* dev)
+{
+    unsigned char value = 0;
+    cbuf_pop(dev->writer_cbuf, &value);
+    write_byte_(dev->serial.base_address, THR, value);
+}
+
+static int update_port_and_buffers(cd_dev* dev)
+{
+    check errors();
+    while(DR)
+    {
+        read_port(dev);
+        wake_up(...);
+    }
+    while(!cbuf_is_empty(dev->writer_cbuf))
+    {
+        if(THRE) write_to_port(dev);
+    }
+}
+*/
 static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
 {
     dev->serial.baud_rate = BAUD_RATE;
@@ -176,6 +211,7 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
     dev->serial.base_address = base_address;
     dev->serial.irq_num = irq_num;
     //TODO: write_serial_config(dev);
+    //TODO: enable_serial_interupt(dev);
     return;
 }
 
@@ -451,10 +487,8 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
                 _dev->serial.parity_enabled = 1;
                 _dev->serial.parity_select = 1;
             }
-            
             // TODO: write_serial_config(_dev);
             up(&_dev->sem);
-            // TODO
             break;
         case CD_IOCTL_GETBUFSIZE:
             retval = __put_user(_dev->buffer_size, (int __user*) arg); 
