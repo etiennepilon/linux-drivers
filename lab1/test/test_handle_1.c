@@ -6,11 +6,11 @@
 #include <stdio.h>
 
 char read_buff[16];
-char write_buff[16] = "Helloooo worldss";
+char write_buff[16] = "Good byeGood bye";
 
 int main(){
     int char_driver, retval=0, i = 0;
-    char_driver = open("/dev/etsmtl_0", O_RDWR);
+    char_driver = open("/dev/etsmtl_1", O_RDWR);
     retval = write(char_driver, write_buff, 8);
     printf("Bytes writen: %u\n", retval);
     retval = write(char_driver, write_buff + 8, 8);
