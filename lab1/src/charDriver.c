@@ -86,6 +86,9 @@ static char read_buffer[MAX_BUFFER_SIZE];
 static char write_buffer[MAX_BUFFER_SIZE];
 static cd_dev* _dev_0;
 static cd_dev* _dev_1;
+//TODO: Remove this
+static wait_queue_head_t test_queue;
+static int test_0_running, test_1_running;
 
 // -- Device Struct --
 static struct file_operations cd_fops = {
@@ -134,6 +137,12 @@ static void write_byte_(unsigned short int base_addr, unsigned short int offset,
     outb(byte, base_addr + offset);
 }
 
+static unsigned char check_flag_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
+{
+    unsigned char value = inb(base_addr + offset);
+    return (value & mask) > 0;// Return 0 or 1
+}
+
 static void write_serial_config(cd_dev *dev)
 {
     unsigned int dl_reg_value = 0;
@@ -179,41 +188,67 @@ static void write_serial_config(cd_dev *dev)
     clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
 }
 
+static void enable_fifo(cd_dev* dev)
+{
+    set_bit_(dev->serial.base_address, FCR, FCR_RCVRRE | FCR_FIFOEN);
+    clear_bit_(dev->serial.base_address, FCR, FCR_RCVRTRM | FCR_RCVRTRL);
+}
+
 static void enable_serial_interupt(cd_dev* dev)
 {
     clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
     set_bit_(dev->serial.base_address, IER, IER_ETBEI | IER_ERBFI);
-    // Enable fifo
-    set_bit_(dev->serial.base_address, FCR, FCR_RCVRRE | FCR_FIFOEN);
-    clear_bit_(dev->serial.base_address, FCR, FCR_RCVRTRM | FCR_RCVRTRL);
 }
-/*
+
+static void write_to_port(cd_dev* dev)
+{
+    unsigned char value = 0;
+    cbuf_pop(dev->writer_cbuf, &value);
+    D printk(KERN_WARNING"Wrote to port: %u", value);
+    write_byte_(dev->serial.base_address, THR, value);
+}
 static void read_port(cd_dev* dev)
 {
     unsigned char value = inb(dev->serial.base_address + RBR);
     cbuf_put(dev->reader_cbuf, value);
 }
-static void write_to_port(cd_dev* dev)
+static int serial_read(cd_dev* dev)
 {
-    unsigned char value = 0;
-    cbuf_pop(dev->writer_cbuf, &value);
-    write_byte_(dev->serial.base_address, THR, value);
+	// Check errors
+	if(check_flag_(dev->serial.base_address, LSR, LSR_FE|LSR_PE|LSR_OE))
+	{
+		D printk(KERN_WARNING"Error: Serial reception invalid");
+		return -1;
+	}
+	//TODO: Spinlock
+	down_interruptible(&dev->sem);
+	if(check_flag_(dev->serial.base_address, LSR, LSR_DR)
+			&& !cbuf_is_full(dev->reader_cbuf))
+	{
+		read_port(dev);
+	}
+	up(&dev->sem);
+	return 0;
+}
+//Note: Possible to call it in While loop to empty the buffer at once
+static int serial_write(cd_dev* dev)
+{
+	unsigned int size = 0, flag_val = 0;
+	//TODO: spinlock
+	down_interruptible(&dev->sem);
+	if(cbuf_is_empty(dev->writer_cbuf)) return 0;
+	flag_val = check_flag_(dev->serial.base_address, LSR, LSR_TEMT);
+	D printk(KERN_WARNING"LSR TEMT Flag %u", flag_val);
+	if(flag_val)
+	{
+		write_to_port(dev);
+		D printk(KERN_WARNING"Wrote to serial port %u", flag_val);
+	}
+	size = cbuf_current_size(dev->writer_cbuf);
+	up(&dev->sem);
+	return size;
 }
 
-static int update_port_and_buffers(cd_dev* dev)
-{
-    check errors();
-    while(DR)
-    {
-        read_port(dev);
-        wake_up(...);
-    }
-    while(!cbuf_is_empty(dev->writer_cbuf))
-    {
-        if(THRE) write_to_port(dev);
-    }
-}
-*/
 static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
 {
     dev->serial.baud_rate = BAUD_RATE;
@@ -226,6 +261,7 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
     D printk(KERN_WARNING"Initialized device serial configs");
     write_serial_config(dev);
     D printk(KERN_WARNING"Wrote device serial configs to port");
+    enable_fifo(dev);
     //TODO: enable_serial_interupt(dev);
     return;
 }
@@ -308,7 +344,19 @@ static int __init cd_init(void){
         D printk(KERN_WARNING"Error creating device.");
         return -ENOTTY;
     }
+    // TODO: Remove this
+    init_waitqueue_head(&test_queue);
     return result;
+}
+
+static void run_test(cd_dev* dev)
+{
+	while(1)
+	{
+		wait_event_interruptible_timeout(test_queue, 0, 1000);
+		serial_read(dev);
+		while(serial_write(dev));
+	}
 }
 
 static void __exit cd_exit(void){
@@ -363,6 +411,8 @@ static int cd_open(struct inode *inode, struct file *flip){
        default:
            break;
    }
+   //TODO: Remove this
+   //run_test(_dev);
 out:
    up(&_dev->sem);
    return retval;
@@ -438,8 +488,6 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
             if(cbuf_is_full(_dev->writer_cbuf)) break;
             cbuf_put(_dev->writer_cbuf, write_buffer[i]);
             write_count += 1;
-            // -- TEST --
-            T cbuf_put(_dev->reader_cbuf, write_buffer[i]);
         }
         up(&_dev->sem);
     }
@@ -453,11 +501,11 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
             if(cbuf_is_full(_dev->writer_cbuf)) break;
             cbuf_put(_dev->writer_cbuf, write_buffer[i]);
             write_count += 1;
-            // -- TEST --
-            T cbuf_put(_dev->reader_cbuf, write_buffer[i]);
         }
         up(&_dev->sem);
     }
+    // TODO: TEST
+    serial_write(_dev);
     return write_count;
 }
 
