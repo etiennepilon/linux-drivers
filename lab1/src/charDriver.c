@@ -110,6 +110,13 @@ static int request_ports(void)
     }
     return 0;
 }
+
+static void release_ports(void)
+{
+	release_region(PORT0_BASE_ADDR, PORT_SIZE);
+	release_region(PORT1_BASE_ADDR, PORT_SIZE);
+}
+
 static void set_bit_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
 {
     unsigned char value = inb(base_addr + offset);
@@ -305,7 +312,6 @@ static int __init cd_init(void){
 }
 
 static void __exit cd_exit(void){
-    int i = 0;
     cdev_del(&cd_cdev);
     unregister_chrdev_region(dev_num, NB_DEVS);
     device_destroy(cd_class0, dev_num);
@@ -314,6 +320,7 @@ static void __exit cd_exit(void){
     class_destroy(cd_class1);
     cd_dev_destroy(_dev_0);
     cd_dev_destroy(_dev_1);
+    release_ports();
     printk(KERN_WARNING"Char driver unregistered\n");
 }
 
