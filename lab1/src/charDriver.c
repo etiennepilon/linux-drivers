@@ -44,9 +44,9 @@
 
 #define PORT_SIZE 0x8
 #define PORT0_IRQ 20
-#define PORT0_BASE_ADDR 0xc020
+#define PORT0_BASE_ADDR 0xc030
 #define PORT1_IRQ 21
-#define PORT1_BASE_ADDR 0xc030
+#define PORT1_BASE_ADDR 0xc020
 
 #ifdef DEBUG
     #define D if(1)
@@ -100,8 +100,14 @@ static struct file_operations cd_fops = {
 // -- SERIAL Functions --
 static int request_ports(void)
 {
-    if(!request_region(PORT0_BASE_ADDR, PORT_SIZE, "serial_0")) return -EBUSY;
-    if(!request_region(PORT1_BASE_ADDR, PORT_SIZE, "serial_1")) return -EBUSY;
+    if(!request_region(PORT0_BASE_ADDR, PORT_SIZE, "serial_0")){
+    	D printk(KERN_WARNING"Could not get serial port at address: %x", PORT0_BASE_ADDR);
+    	return -EBUSY;
+    }
+    if(!request_region(PORT1_BASE_ADDR, PORT_SIZE, "serial_1")){
+    	D printk(KERN_WARNING"Could not get serial port at address: %x", PORT1_BASE_ADDR);
+    	return -EBUSY;
+    }
     return 0;
 }
 static void set_bit_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
@@ -210,7 +216,9 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
     dev->serial.word_len_selection=WLEN_8;
     dev->serial.base_address = base_address;
     dev->serial.irq_num = irq_num;
-    //TODO: write_serial_config(dev);
+    D printk(KERN_WARNING"Initialized device serial configs");
+    write_serial_config(dev);
+    D printk(KERN_WARNING"Wrote device serial configs to port");
     //TODO: enable_serial_interupt(dev);
     return;
 }
@@ -266,13 +274,13 @@ static int __init cd_init(void){
         D printk(KERN_WARNING"Error allocating handle number in alloc_chrdev_region\n");
         return result;
     }
-    /* TODO: uncomment this
+    D printk(KERN_WARNING"Initialized device: MAJOR %u, MINOR %u\n", MAJOR(dev_num), MINOR(dev_num));
     result = request_ports();
     if (result < 0){
         D printk(KERN_WARNING"Error requesting serial ports\n");
         return result;
     }
-    */
+    D printk(KERN_WARNING"Requested serial port region");
     // -- Create device handle --
     cd_class0 = class_create(THIS_MODULE, "serialClass0");
     device_create(cd_class0, NULL/*no parent*/, dev_num, NULL, "etsmtl_0");
