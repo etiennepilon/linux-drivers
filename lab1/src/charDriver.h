@@ -80,6 +80,7 @@ typedef struct {
     cbuf_handle_t reader_cbuf; /*From Port to User*/
     cbuf_handle_t writer_cbuf; /*From User to Port*/
     struct semaphore sem;
+    spinlock_t lock;
     wait_queue_head_t wait_queue;
     unsigned int num_reader;/*Used for release*/
     unsigned int num_writer;/*Used for release*/
