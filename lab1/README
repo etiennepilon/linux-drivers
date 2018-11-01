@@ -1,5 +1,24 @@
-# Tests
-run command from this repository
+
+
+Je n'ai pas respectee les specs a deux endroits car bug:
+* Desactivation/activation des interupts lorsque le tx buffer est vide
+* Request_interupts dans le open/release (dans le init)
+
+# Setup
+
+Check for IRQ numbers and serial address on the system with the command
+
 ```
-    cd test && sh run_test.sh
+setserial -g /dev/ttyS[56]
+```
+In order to load/reload the module into the kernel, simply use:
+```
+sh reload.sh
+```
+
+# Tests
+To compile the tests:
+```
+cd test && gcc test_char_driver.c -o unit_test -lpthread
+./unit_test
 ```
