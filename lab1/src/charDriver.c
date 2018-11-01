@@ -283,6 +283,7 @@ static irqreturn_t handler(int irq, void *data)
 	if (is_ready_for_tx && !cbuf_is_empty(dev->writer_cbuf))
 	{
 		write_to_port(dev);
+		wake_up_interruptible(&dev->wait_queue);
 	}
 	if (has_data_ready && !cbuf_is_full(dev->reader_cbuf))
 	{
@@ -426,6 +427,7 @@ static int cd_open(struct inode *inode, struct file *flip){
        default:
            break;
    }
+   //retval = request_irq(_dev->serial.irq_num, handler, 0, DEV_NAME, _dev);
 out:
    up(&_dev->sem);
    return retval;
@@ -448,6 +450,7 @@ static int cd_release(struct inode *inode, struct file *flip){
        default:
            break;
    }
+   //if (_dev->num_reader <= 0 && _dev->num_writer <= 0)free_irq(_dev->serial.irq_num, _dev);
    up(&_dev->sem);
    return 0;
 }
@@ -486,35 +489,32 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
 }
 
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_pos){
-    int write_count = 0, i = 0, buffer_size=0;
+    int write_count = 0, i = 0, buffer_size=0, blocking = 0;
     cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
     if (_dev == NULL) return -ENOENT;
-    if(flip->f_flags & O_NONBLOCK)
+    blocking = !(flip->f_flags & O_NONBLOCK);
+    if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+    if (blocking)
     {
-        buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
-        copy_from_user(write_buffer, ubuf, buffer_size);
-        if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
-        for (i = 0; i < buffer_size; i ++) {
-            if(cbuf_is_full(_dev->writer_cbuf)) break;
-            cbuf_put(_dev->writer_cbuf, write_buffer[i]);
-            write_count += 1;
-        }
-        up(&_dev->sem);
+    	while(cbuf_free_space_count(_dev->writer_cbuf) < count)
+    	{
+    		up(&_dev->sem);
+            if(wait_event_interruptible(
+                _dev->wait_queue,
+                (cbuf_free_space_count(_dev->writer_cbuf) >= count)
+                )) return -ERESTARTSYS;
+            if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+    	}
     }
-    else
-    {
-        // TODO: Add blocking call when count != cbuf_current_size
-        buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
-        copy_from_user(write_buffer, ubuf, buffer_size);
-        if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
-        for (i = 0; i < buffer_size; i ++) {
-            if(cbuf_is_full(_dev->writer_cbuf)) break;
-            cbuf_put(_dev->writer_cbuf, write_buffer[i]);
-            write_count += 1;
-        }
-        up(&_dev->sem);
-    }
-    //serial_write(_dev);
+
+	buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
+	copy_from_user(write_buffer, ubuf, buffer_size);
+	for (i = 0; i < buffer_size; i ++) {
+		if(cbuf_is_full(_dev->writer_cbuf)) break;
+		cbuf_put(_dev->writer_cbuf, write_buffer[i]);
+		write_count += 1;
+	}
+	up(&_dev->sem);
     return write_count;
 }
 
