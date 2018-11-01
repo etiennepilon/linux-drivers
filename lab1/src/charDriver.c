@@ -26,8 +26,10 @@
 #include <uapi/asm-generic/errno-base.h>
 #include <linux/fcntl.h>
 #include <linux/wait.h>
-#include <linux/spinlock.h>
+#include <linux/io.h>
+#include <linux/interrupt.h>
 #include <linux/device.h>
+#include <linux/irq.h>
 #include <asm/atomic.h>
 #include <linux/uaccess.h>
 #include "charDriver.h"
@@ -42,10 +44,10 @@
 #define MAX_WRITER 1
 #define MAX_READER 1
 
-#define PORT_SIZE 0x8
-#define PORT0_IRQ 20
+#define PORT_SIZE 8
+#define PORT0_IRQ 21
 #define PORT0_BASE_ADDR 0xc030
-#define PORT1_IRQ 21
+#define PORT1_IRQ 22
 #define PORT1_BASE_ADDR 0xc020
 
 #ifdef DEBUG
@@ -71,11 +73,6 @@ static int cd_release(struct inode *inode, struct file *flip);
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_pos);
 static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count, loff_t *f_pos);
 static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg);
-// -- Serial prototypes --
-// static serial_irq(whatever);
-//TODO: Manage two handles (Create two class)
-//  each class should have their dev
-// -- Variables --
 
 static dev_t dev_num;
 static int cd_minor = 0;
@@ -86,9 +83,6 @@ static char read_buffer[MAX_BUFFER_SIZE];
 static char write_buffer[MAX_BUFFER_SIZE];
 static cd_dev* _dev_0;
 static cd_dev* _dev_1;
-//TODO: Remove this
-static wait_queue_head_t test_queue;
-static int test_0_running, test_1_running;
 
 // -- Device Struct --
 static struct file_operations cd_fops = {
@@ -101,23 +95,19 @@ static struct file_operations cd_fops = {
 };
 
 // -- SERIAL Functions --
-static int request_ports(void)
+
+static int request_port(cd_dev* dev)
 {
-    if(!request_region(PORT0_BASE_ADDR, PORT_SIZE, "serial_0")){
-    	D printk(KERN_WARNING"Could not get serial port at address: %x", PORT0_BASE_ADDR);
-    	return -EBUSY;
-    }
-    if(!request_region(PORT1_BASE_ADDR, PORT_SIZE, "serial_1")){
-    	D printk(KERN_WARNING"Could not get serial port at address: %x", PORT1_BASE_ADDR);
+    if(!request_region(dev->serial.base_address, PORT_SIZE, "serial_0")){
+    	D printk(KERN_WARNING"Could not get serial port at address: %x", dev->serial.base_address);
     	return -EBUSY;
     }
     return 0;
 }
 
-static void release_ports(void)
+static void release_port(cd_dev* dev)
 {
-	release_region(PORT0_BASE_ADDR, PORT_SIZE);
-	release_region(PORT1_BASE_ADDR, PORT_SIZE);
+	release_region(dev->serial.base_address, PORT_SIZE);
 }
 
 static void set_bit_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
@@ -140,6 +130,7 @@ static void write_byte_(unsigned short int base_addr, unsigned short int offset,
 static unsigned char check_flag_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
 {
     unsigned char value = inb(base_addr + offset);
+    //D printk(KERN_WARNING"Check flag value: %x, mask: %x", value, mask);
     return (value & mask) > 0;// Return 0 or 1
 }
 
@@ -150,12 +141,17 @@ static void write_serial_config(cd_dev *dev)
     // set parity
     if (dev->serial.parity_enabled)
     {
+    	D printk(KERN_WARNING"Parity is enabled");
         set_bit_(dev->serial.base_address, LCR, LCR_PEN);
         if (dev->serial.parity_select) set_bit_(dev->serial.base_address, LCR, LCR_EPS);
         else clear_bit_(dev->serial.base_address, LCR, LCR_EPS);
     } else {
         clear_bit_(dev->serial.base_address, LCR, LCR_PEN);
+        clear_bit_(dev->serial.base_address, LCR, LCR_EPS);
     }
+    // stop bit
+    if (dev->serial.stop_bit) set_bit_(dev->serial.base_address, LCR, LCR_STB);
+    else clear_bit_(dev->serial.base_address, LCR, LCR_STB);
     // set datasize
     switch (dev->serial.word_len_selection)
     {
@@ -180,10 +176,13 @@ static void write_serial_config(cd_dev *dev)
     set_bit_(dev->serial.base_address, LCR, LCR_DLAB);
     //Set baud
     dl_reg_value = (unsigned int)(SERIAL_CLK / (16 * dev->serial.baud_rate));
+    D printk(KERN_WARNING"Reg val: %u", dl_reg_value);
     // DLL
     dl_byte_buffer = (char) (dl_reg_value & 0x00FF);
+    D printk(KERN_WARNING"LSB val: %u", dl_byte_buffer);
     write_byte_(dev->serial.base_address, DLL, dl_byte_buffer);
     dl_byte_buffer = (char) ((dl_reg_value & 0xFF00) >> 8);
+    D printk(KERN_WARNING"MSB val: %u", dl_byte_buffer);
     write_byte_(dev->serial.base_address, DLM, dl_byte_buffer);
     clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
 }
@@ -204,7 +203,7 @@ static void write_to_port(cd_dev* dev)
 {
     unsigned char value = 0;
     cbuf_pop(dev->writer_cbuf, &value);
-    D printk(KERN_WARNING"Wrote to port: %u", value);
+    //D printk(KERN_WARNING"Wrote to port: %u", value);
     write_byte_(dev->serial.base_address, THR, value);
 }
 static void read_port(cd_dev* dev)
@@ -214,20 +213,22 @@ static void read_port(cd_dev* dev)
 }
 static int serial_read(cd_dev* dev)
 {
+	unsigned char dr_flag = 0;
 	// Check errors
 	if(check_flag_(dev->serial.base_address, LSR, LSR_FE|LSR_PE|LSR_OE))
 	{
-		D printk(KERN_WARNING"Error: Serial reception invalid");
+		D printk(KERN_WARNING"Error: Serial reception invalid\n");
 		return -1;
 	}
 	//TODO: Spinlock
-	down_interruptible(&dev->sem);
-	if(check_flag_(dev->serial.base_address, LSR, LSR_DR)
-			&& !cbuf_is_full(dev->reader_cbuf))
+	//down_interruptible(&dev->sem);
+	dr_flag = check_flag_(dev->serial.base_address, LSR, LSR_DR);
+	//D printk(KERN_WARNING"DR flag is %u\n", dr_flag);
+	if(dr_flag && !cbuf_is_full(dev->reader_cbuf))
 	{
 		read_port(dev);
 	}
-	up(&dev->sem);
+	//up(&dev->sem);
 	return 0;
 }
 //Note: Possible to call it in While loop to empty the buffer at once
@@ -235,34 +236,49 @@ static int serial_write(cd_dev* dev)
 {
 	unsigned int size = 0, flag_val = 0;
 	//TODO: spinlock
-	down_interruptible(&dev->sem);
+	//down_interruptible(&dev->sem);
 	if(cbuf_is_empty(dev->writer_cbuf)) return 0;
-	flag_val = check_flag_(dev->serial.base_address, LSR, LSR_TEMT);
-	D printk(KERN_WARNING"LSR TEMT Flag %u", flag_val);
+	flag_val = check_flag_(dev->serial.base_address, LSR, LSR_THRE);
+	//D printk(KERN_WARNING"LSR THRE Flag %u", flag_val);
 	if(flag_val)
 	{
 		write_to_port(dev);
-		D printk(KERN_WARNING"Wrote to serial port %u", flag_val);
+		//D printk(KERN_WARNING"Wrote to serial port %u", flag_val);
 	}
 	size = cbuf_current_size(dev->writer_cbuf);
-	up(&dev->sem);
+	//up(&dev->sem);
 	return size;
+}
+
+static irqreturn_t handler(int irq, void *data)
+{
+	cd_dev* dev = (cd_dev*) data;
+
+	serial_write(dev);
+	serial_read(dev);
+	//wake_up_interruptible(&dev->wait_queue);
+
+	return IRQ_HANDLED;
 }
 
 static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
 {
-    dev->serial.baud_rate = BAUD_RATE;
+    int retval = 0;
+	dev->serial.baud_rate = BAUD_RATE;
     dev->serial.parity_select = 0;
     dev->serial.parity_enabled= 0;
     dev->serial.stop_bit = 0;
     dev->serial.word_len_selection=WLEN_8;
     dev->serial.base_address = base_address;
+    D printk(KERN_WARNING"Base addr %x, dev addr: %x", base_address, dev->serial.base_address);
     dev->serial.irq_num = irq_num;
+    retval = request_port(dev);
+    if (retval < 0) return;
     D printk(KERN_WARNING"Initialized device serial configs");
     write_serial_config(dev);
     D printk(KERN_WARNING"Wrote device serial configs to port");
     enable_fifo(dev);
-    //TODO: enable_serial_interupt(dev);
+    enable_serial_interupt(dev);
     return;
 }
 
@@ -302,6 +318,7 @@ static cd_dev* cd_dev_create(int irq_num, int base_address){
 
 static void cd_dev_destroy(cd_dev* dev){
     if (dev == NULL) return;
+    release_port(dev);
     cbuf_free(dev->reader_cbuf);
     cbuf_free(dev->writer_cbuf);
     kfree(dev);
@@ -318,12 +335,6 @@ static int __init cd_init(void){
         return result;
     }
     D printk(KERN_WARNING"Initialized device: MAJOR %u, MINOR %u\n", MAJOR(dev_num), MINOR(dev_num));
-    result = request_ports();
-    if (result < 0){
-        D printk(KERN_WARNING"Error requesting serial ports\n");
-        return result;
-    }
-    D printk(KERN_WARNING"Requested serial port region");
     // -- Create device handle --
     cd_class0 = class_create(THIS_MODULE, "serialClass0");
     device_create(cd_class0, NULL/*no parent*/, dev_num, NULL, "etsmtl_0");
@@ -344,19 +355,7 @@ static int __init cd_init(void){
         D printk(KERN_WARNING"Error creating device.");
         return -ENOTTY;
     }
-    // TODO: Remove this
-    init_waitqueue_head(&test_queue);
     return result;
-}
-
-static void run_test(cd_dev* dev)
-{
-	while(1)
-	{
-		wait_event_interruptible_timeout(test_queue, 0, 1000);
-		serial_read(dev);
-		while(serial_write(dev));
-	}
 }
 
 static void __exit cd_exit(void){
@@ -368,14 +367,14 @@ static void __exit cd_exit(void){
     class_destroy(cd_class1);
     cd_dev_destroy(_dev_0);
     cd_dev_destroy(_dev_1);
-    release_ports();
     printk(KERN_WARNING"Char driver unregistered\n");
 }
 
 static int cd_open(struct inode *inode, struct file *flip){
     int retval = 0;
     cd_dev* _dev = MINOR(inode->i_rdev) == 0 ? _dev_0: _dev_1;
-   D printk(KERN_WARNING"charDriver opened\n");
+    D printk(KERN_WARNING"Open handle: %u\n", MINOR(inode->i_rdev));
+    D printk(KERN_WARNING"Read buffer %u, write buffer: %u\n", cbuf_current_size(_dev->reader_cbuf), cbuf_current_size(_dev->writer_cbuf));
    
    if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
    switch((flip->f_flags & O_ACCMODE)){
@@ -385,15 +384,23 @@ static int cd_open(struct inode *inode, struct file *flip){
                retval = -ENOTTY;
                goto out;
            }
+           retval = request_irq(_dev->serial.irq_num, handler, 0, DEV_NAME, _dev);
+           if (retval < 0) {
+        	   D printk(KERN_WARNING"Error requesting IRQ %u\n", _dev->serial.irq_num);
+        	   goto out;
+           }
            _dev->num_reader++;
-           // TODO: Put Serial port to open/receive so it can start receiving
-           // data
            break;
        case O_WRONLY:
            if(_dev->num_writer >= MAX_WRITER || _dev->num_reader >= MAX_READER) 
            {
                retval = -ENOTTY;
                goto out;
+           }
+           retval = request_irq(_dev->serial.irq_num, handler, 0, DEV_NAME, _dev);
+           if (retval < 0) {
+        	   D printk(KERN_WARNING"Error requesting IRQ %u\n", _dev->serial.irq_num);
+        	   goto out;
            }
            _dev->num_writer++;
            break;
@@ -403,16 +410,17 @@ static int cd_open(struct inode *inode, struct file *flip){
                retval = -ENOTTY;
                goto out;
            }
+           retval = request_irq(_dev->serial.irq_num, handler, 0, "ets_serial", _dev);
+           if (retval < 0) {
+        	   D printk(KERN_WARNING"Error requesting IRQ %u\n", _dev->serial.irq_num);
+        	   goto out;
+           }
            _dev->num_reader++;
            _dev->num_writer++;
-           // TODO: Put Serial port to open/receive so it can start receiving
-           // data
            break;
        default:
            break;
    }
-   //TODO: Remove this
-   //run_test(_dev);
 out:
    up(&_dev->sem);
    return retval;
@@ -424,17 +432,16 @@ static int cd_release(struct inode *inode, struct file *flip){
    switch((flip->f_flags & O_ACCMODE)){
        case O_RDONLY:
            _dev->num_reader--;
-           // TODO: Put Serial port to close so it can start receiving
-           // data
+           free_irq(_dev->serial.irq_num, _dev);
            break;
        case O_WRONLY:
            _dev->num_writer--;
+           free_irq(_dev->serial.irq_num, _dev);
            break;
        case O_RDWR:
            _dev->num_reader--;
            _dev->num_writer--;
-           // TODO: Put Serial port to close so it can start receiving
-           // data
+           free_irq(_dev->serial.irq_num, _dev);
            break;
        default:
            break;
@@ -446,9 +453,10 @@ static int cd_release(struct inode *inode, struct file *flip){
 static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_t *f_pos){
     int read_count = 0, i = 0, buf_size = 0, blocking = 0;
     cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
-    D printk(KERN_WARNING"Minor num: %u", MINOR(flip->f_inode->i_rdev));
     if(_dev == NULL) return -ENOENT; 
     if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
+    // -- Triggers in case circular buffer was full --
+    serial_read(_dev);
     blocking = !(flip->f_flags & O_NONBLOCK);
     if (blocking)
     {
@@ -471,6 +479,7 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
     } 
     copy_to_user(ubuf, read_buffer, read_count);
     up(&_dev->sem);
+
     return (ssize_t)read_count;
 }
 
@@ -478,7 +487,6 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
     int write_count = 0, i = 0, buffer_size=0;
     cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
     if (_dev == NULL) return -ENOENT;
-    // TODO: Must put Serial port in tx mode right away
     if(flip->f_flags & O_NONBLOCK)
     {
         buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
@@ -504,7 +512,6 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
         }
         up(&_dev->sem);
     }
-    // TODO: TEST
     serial_write(_dev);
     return write_count;
 }
