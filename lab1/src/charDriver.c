@@ -130,7 +130,6 @@ static void write_byte_(unsigned short int base_addr, unsigned short int offset,
 static unsigned char check_flag_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
 {
     unsigned char value = inb(base_addr + offset);
-    //D printk(KERN_WARNING"Check flag value: %x, mask: %x", value, mask);
     return (value & mask) > 0;// Return 0 or 1
 }
 
@@ -203,7 +202,6 @@ static void write_to_port(cd_dev* dev)
 {
     unsigned char value = 0;
     cbuf_pop(dev->writer_cbuf, &value);
-    //D printk(KERN_WARNING"Wrote to port: %u", value);
     write_byte_(dev->serial.base_address, THR, value);
 }
 static void read_port(cd_dev* dev)
@@ -211,53 +209,68 @@ static void read_port(cd_dev* dev)
     unsigned char value = inb(dev->serial.base_address + RBR);
     cbuf_put(dev->reader_cbuf, value);
 }
-static int serial_read(cd_dev* dev)
-{
-	unsigned char dr_flag = 0;
-	// Check errors
-	if(check_flag_(dev->serial.base_address, LSR, LSR_FE|LSR_PE|LSR_OE))
-	{
-		D printk(KERN_WARNING"Error: Serial reception invalid\n");
-		return -1;
-	}
-	//TODO: Spinlock
-	//down_interruptible(&dev->sem);
-	dr_flag = check_flag_(dev->serial.base_address, LSR, LSR_DR);
-	//D printk(KERN_WARNING"DR flag is %u\n", dr_flag);
-	if(dr_flag && !cbuf_is_full(dev->reader_cbuf))
-	{
-		read_port(dev);
-	}
-	//up(&dev->sem);
-	return 0;
-}
-//Note: Possible to call it in While loop to empty the buffer at once
-static int serial_write(cd_dev* dev)
-{
-	unsigned int size = 0, flag_val = 0;
-	//TODO: spinlock
-	//down_interruptible(&dev->sem);
-	if(cbuf_is_empty(dev->writer_cbuf)) return 0;
-	flag_val = check_flag_(dev->serial.base_address, LSR, LSR_THRE);
-	//D printk(KERN_WARNING"LSR THRE Flag %u", flag_val);
-	if(flag_val)
-	{
-		write_to_port(dev);
-		//D printk(KERN_WARNING"Wrote to serial port %u", flag_val);
-	}
-	size = cbuf_current_size(dev->writer_cbuf);
-	//up(&dev->sem);
-	return size;
-}
+//static int serial_read(cd_dev* dev)
+//{
+//	unsigned char dr_flag = 0;
+//	// Check errors
+//	if(check_flag_(dev->serial.base_address, LSR, LSR_FE|LSR_PE|LSR_OE))
+//	{
+//		D printk(KERN_WARNING"Error: Serial reception invalid\n");
+//		return -1;
+//	}
+//
+//	dr_flag = check_flag_(dev->serial.base_address, LSR, LSR_DR);
+//	if(dr_flag && !cbuf_is_full(dev->reader_cbuf))
+//	{
+//		spin_unlock(&dev->lock);
+//		read_port(dev);
+//		spin_unlock(&dev->lock);
+//	}
+//	return 0;
+//}
+//static int serial_write(cd_dev* dev)
+//{
+//	unsigned int size = 0, flag_val = 0;
+//
+//	if(cbuf_is_empty(dev->writer_cbuf)) return 0;
+//	flag_val = check_flag_(dev->serial.base_address, LSR, LSR_THRE);
+//	if(flag_val)
+//	{
+//		spin_lock(&dev->lock);
+//		write_to_port(dev);
+//		spin_unlock(&dev->lock);
+//	}
+//	size = cbuf_current_size(dev->writer_cbuf);
+//	return size;
+//}
 
 static irqreturn_t handler(int irq, void *data)
 {
 	cd_dev* dev = (cd_dev*) data;
+	unsigned int has_data_ready = 0, is_ready_for_tx = 0, has_rx_errors = 0;
 
-	serial_write(dev);
-	serial_read(dev);
-	//wake_up_interruptible(&dev->wait_queue);
-
+	has_rx_errors = check_flag_(dev->serial.base_address, LSR, LSR_FE|LSR_PE|LSR_OE);
+	if (has_rx_errors)
+	{
+		printk(KERN_DEBUG"Reception error on serial port");
+		return IRQ_HANDLED;
+	}
+	spin_lock(&dev->lock);
+	has_data_ready = check_flag_(dev->serial.base_address, LSR, LSR_DR);
+	is_ready_for_tx = check_flag_(dev->serial.base_address, LSR, LSR_THRE);
+	if (is_ready_for_tx && !cbuf_is_empty(dev->writer_cbuf))
+	{
+		//
+		write_to_port(dev);
+		//spin_unlock(&dev->lock);
+	}
+	if (has_data_ready && !cbuf_is_full(dev->reader_cbuf))
+	{
+		//spin_lock(&dev->lock);
+		read_port(dev);
+		wake_up_interruptible(&dev->wait_queue);
+	}
+	spin_unlock(&dev->lock);
 	return IRQ_HANDLED;
 }
 
@@ -270,7 +283,6 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
     dev->serial.stop_bit = 0;
     dev->serial.word_len_selection=WLEN_8;
     dev->serial.base_address = base_address;
-    D printk(KERN_WARNING"Base addr %x, dev addr: %x", base_address, dev->serial.base_address);
     dev->serial.irq_num = irq_num;
     retval = request_port(dev);
     if (retval < 0) return;
@@ -284,7 +296,7 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
 
 // -- Private methods --
 static cd_dev* cd_dev_create(int irq_num, int base_address){
-    char *read_buf, *write_buf;
+    char *read_buf, *write_buf, retval = 0;
     cd_dev* dev;
     dev = kmalloc(sizeof(cd_dev), GFP_KERNEL);
     if (dev == NULL) {
@@ -313,11 +325,18 @@ static cd_dev* cd_dev_create(int irq_num, int base_address){
     dev->num_writer = 0;
     init_serial_port(dev, irq_num, base_address);
     sema_init(&dev->sem, 1);
+    spin_lock_init(&dev->lock);
+    retval = request_irq(dev->serial.irq_num, handler, 0, DEV_NAME, dev);
+    if (retval < 0) {
+ 	   D printk(KERN_WARNING"Error requesting IRQ %u\n", dev->serial.irq_num);
+ 	   return NULL;
+    }
     return dev;
 }
 
 static void cd_dev_destroy(cd_dev* dev){
     if (dev == NULL) return;
+    free_irq(dev->serial.irq_num, dev);
     release_port(dev);
     cbuf_free(dev->reader_cbuf);
     cbuf_free(dev->writer_cbuf);
@@ -384,11 +403,6 @@ static int cd_open(struct inode *inode, struct file *flip){
                retval = -ENOTTY;
                goto out;
            }
-           retval = request_irq(_dev->serial.irq_num, handler, 0, DEV_NAME, _dev);
-           if (retval < 0) {
-        	   D printk(KERN_WARNING"Error requesting IRQ %u\n", _dev->serial.irq_num);
-        	   goto out;
-           }
            _dev->num_reader++;
            break;
        case O_WRONLY:
@@ -397,11 +411,6 @@ static int cd_open(struct inode *inode, struct file *flip){
                retval = -ENOTTY;
                goto out;
            }
-           retval = request_irq(_dev->serial.irq_num, handler, 0, DEV_NAME, _dev);
-           if (retval < 0) {
-        	   D printk(KERN_WARNING"Error requesting IRQ %u\n", _dev->serial.irq_num);
-        	   goto out;
-           }
            _dev->num_writer++;
            break;
        case O_RDWR:
@@ -409,11 +418,6 @@ static int cd_open(struct inode *inode, struct file *flip){
            {
                retval = -ENOTTY;
                goto out;
-           }
-           retval = request_irq(_dev->serial.irq_num, handler, 0, "ets_serial", _dev);
-           if (retval < 0) {
-        	   D printk(KERN_WARNING"Error requesting IRQ %u\n", _dev->serial.irq_num);
-        	   goto out;
            }
            _dev->num_reader++;
            _dev->num_writer++;
@@ -432,16 +436,13 @@ static int cd_release(struct inode *inode, struct file *flip){
    switch((flip->f_flags & O_ACCMODE)){
        case O_RDONLY:
            _dev->num_reader--;
-           free_irq(_dev->serial.irq_num, _dev);
            break;
        case O_WRONLY:
            _dev->num_writer--;
-           free_irq(_dev->serial.irq_num, _dev);
            break;
        case O_RDWR:
            _dev->num_reader--;
            _dev->num_writer--;
-           free_irq(_dev->serial.irq_num, _dev);
            break;
        default:
            break;
@@ -456,7 +457,7 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
     if(_dev == NULL) return -ENOENT; 
     if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
     // -- Triggers in case circular buffer was full --
-    serial_read(_dev);
+    //serial_read(_dev);
     blocking = !(flip->f_flags & O_NONBLOCK);
     if (blocking)
     {
@@ -512,7 +513,7 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
         }
         up(&_dev->sem);
     }
-    serial_write(_dev);
+    //serial_write(_dev);
     return write_count;
 }
 
