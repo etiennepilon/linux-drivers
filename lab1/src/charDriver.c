@@ -133,11 +133,20 @@ static void release_port(cd_dev* dev)
 	release_region(dev->serial.base_address, PORT_SIZE);
 }
 
-static void write_serial_config(cd_dev *dev)
+static void enable_fifo(cd_dev* dev)
 {
-    unsigned int dl_reg_value = 0;
-    char dl_byte_buffer = 0;
-    // set parity
+    set_bit_(dev->serial.base_address, FCR, FCR_RCVRRE | FCR_FIFOEN);
+    clear_bit_(dev->serial.base_address, FCR, FCR_RCVRTRM | FCR_RCVRTRL);
+}
+
+static void enable_serial_interupt(cd_dev* dev)
+{
+    clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
+    set_bit_(dev->serial.base_address, IER, IER_ETBEI | IER_ERBFI);
+}
+
+static inline void write_parity_conf(cd_dev* dev)
+{
     if (dev->serial.parity_enabled)
     {
     	D printk(KERN_WARNING"Parity is enabled");
@@ -145,13 +154,20 @@ static void write_serial_config(cd_dev *dev)
         if (dev->serial.parity_select) set_bit_(dev->serial.base_address, LCR, LCR_EPS);
         else clear_bit_(dev->serial.base_address, LCR, LCR_EPS);
     } else {
+    	D printk(KERN_WARNING"Parity is disabled");
         clear_bit_(dev->serial.base_address, LCR, LCR_PEN);
         clear_bit_(dev->serial.base_address, LCR, LCR_EPS);
     }
-    // stop bit
+}
+
+static inline void write_stop_bit_conf(cd_dev* dev)
+{
     if (dev->serial.stop_bit) set_bit_(dev->serial.base_address, LCR, LCR_STB);
     else clear_bit_(dev->serial.base_address, LCR, LCR_STB);
-    // set datasize
+}
+
+static inline void write_serial_wordlen_conf(cd_dev* dev)
+{
     switch (dev->serial.word_len_selection)
     {
         case WLEN_5:
@@ -172,11 +188,15 @@ static void write_serial_config(cd_dev *dev)
             set_bit_(dev->serial.base_address, LCR, LCR_WLS1 | LCR_WLS0);
             break;
     }
+}
+
+static inline void write_baud_rate(cd_dev* dev)
+{
+    unsigned int dl_reg_value = 0;
+    char dl_byte_buffer = 0;
     set_bit_(dev->serial.base_address, LCR, LCR_DLAB);
-    //Set baud
     dl_reg_value = (unsigned int)(SERIAL_CLK / (16 * dev->serial.baud_rate));
     D printk(KERN_WARNING"Reg val: %u", dl_reg_value);
-    // DLL
     dl_byte_buffer = (char) (dl_reg_value & 0x00FF);
     D printk(KERN_WARNING"LSB val: %u", dl_byte_buffer);
     write_byte_(dev->serial.base_address, DLL, dl_byte_buffer);
@@ -186,18 +206,15 @@ static void write_serial_config(cd_dev *dev)
     clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
 }
 
-static void enable_fifo(cd_dev* dev)
+static inline void disable_tx_interupt(cd_dev* dev)
 {
-    set_bit_(dev->serial.base_address, FCR, FCR_RCVRRE | FCR_FIFOEN);
-    clear_bit_(dev->serial.base_address, FCR, FCR_RCVRTRM | FCR_RCVRTRL);
+	clear_bit_(dev->serial.base_address, IER, IER_ETBEI);
 }
 
-static void enable_serial_interupt(cd_dev* dev)
+static inline void enable_tx_interupt(cd_dev* dev)
 {
-    clear_bit_(dev->serial.base_address, LCR, LCR_DLAB);
-    set_bit_(dev->serial.base_address, IER, IER_ETBEI | IER_ERBFI);
+	set_bit_(dev->serial.base_address, IER, IER_ETBEI);
 }
-
 
 static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
 {
@@ -212,10 +229,13 @@ static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
     retval = request_port(dev);
     if (retval < 0) return;
     D printk(KERN_WARNING"Initialized device serial configs");
-    write_serial_config(dev);
-    D printk(KERN_WARNING"Wrote device serial configs to port");
+    write_parity_conf(dev);
+    write_stop_bit_conf(dev);
+    write_baud_rate(dev);
+    write_serial_wordlen_conf(dev);
     enable_fifo(dev);
     enable_serial_interupt(dev);
+    D printk(KERN_WARNING"Wrote device serial configs to port");
     return;
 }
 
@@ -224,46 +244,13 @@ static void write_to_port(cd_dev* dev)
     unsigned char value = 0;
     cbuf_pop(dev->writer_cbuf, &value);
     write_byte_(dev->serial.base_address, THR, value);
+    //if(cbuf_is_empty(dev->writer_cbuf)) disable_tx_interupt(dev);
 }
 static void read_port(cd_dev* dev)
 {
     unsigned char value = inb(dev->serial.base_address + RBR);
     cbuf_put(dev->reader_cbuf, value);
 }
-//static int serial_read(cd_dev* dev)
-//{
-//	unsigned char dr_flag = 0;
-//	// Check errors
-//	if(check_flag_(dev->serial.base_address, LSR, LSR_FE|LSR_PE|LSR_OE))
-//	{
-//		D printk(KERN_WARNING"Error: Serial reception invalid\n");
-//		return -1;
-//	}
-//
-//	dr_flag = check_flag_(dev->serial.base_address, LSR, LSR_DR);
-//	if(dr_flag && !cbuf_is_full(dev->reader_cbuf))
-//	{
-//		spin_unlock(&dev->lock);
-//		read_port(dev);
-//		spin_unlock(&dev->lock);
-//	}
-//	return 0;
-//}
-//static int serial_write(cd_dev* dev)
-//{
-//	unsigned int size = 0, flag_val = 0;
-//
-//	if(cbuf_is_empty(dev->writer_cbuf)) return 0;
-//	flag_val = check_flag_(dev->serial.base_address, LSR, LSR_THRE);
-//	if(flag_val)
-//	{
-//		spin_lock(&dev->lock);
-//		write_to_port(dev);
-//		spin_unlock(&dev->lock);
-//	}
-//	size = cbuf_current_size(dev->writer_cbuf);
-//	return size;
-//}
 
 static irqreturn_t handler(int irq, void *data)
 {
@@ -460,8 +447,6 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
     cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
     if(_dev == NULL) return -ENOENT; 
     if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
-    // -- Triggers in case circular buffer was full --
-    //serial_read(_dev);
     blocking = !(flip->f_flags & O_NONBLOCK);
     if (blocking)
     {
@@ -479,7 +464,6 @@ static ssize_t cd_read(struct file *flip, char __user *ubuf, size_t count, loff_
     read_count = count < buf_size ? count : buf_size;
     for(i = 0; i < read_count; i ++)
     {
-        // TODO: Catch error
        cbuf_pop(_dev->reader_cbuf, read_buffer + i); 
     } 
     copy_to_user(ubuf, read_buffer, read_count);
@@ -509,6 +493,7 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
 
 	buffer_size = count < _dev->buffer_size? count: _dev->buffer_size;
 	copy_from_user(write_buffer, ubuf, buffer_size);
+	//if(cbuf_is_empty(_dev->writer_cbuf)) enable_tx_interupt(_dev);
 	for (i = 0; i < buffer_size; i ++) {
 		if(cbuf_is_full(_dev->writer_cbuf)) break;
 		cbuf_put(_dev->writer_cbuf, write_buffer[i]);
@@ -521,11 +506,18 @@ static ssize_t cd_write(struct file *flip, const char __user *ubuf, size_t count
 static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
     int err = 0, retval = 0, new_size = 0, user_value = 0;
     cd_dev* _dev = MINOR(flip->f_inode->i_rdev) == 0 ? _dev_0: _dev_1;
-    if(_IOC_TYPE(cmd) != CD_IOCTL_MAGIC || _IOC_NR(cmd) > CD_IOCTL_MAX) return -ENOTTY;
-    if(_IOC_DIR(cmd) & _IOC_READ) 
+    if(_IOC_TYPE(cmd) != CD_IOCTL_MAGIC || _IOC_NR(cmd) > CD_IOCTL_MAX)
+    {
+    	return -ENOTTY;
+    }
+    if(_IOC_DIR(cmd) & _IOC_READ)
+    {
         err = !access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
+    }
     if(_IOC_DIR(cmd) & _IOC_WRITE) 
+    {
         err = !access_ok(VERIFY_READ, (void __user*)arg, _IOC_SIZE(cmd));
+    }
     if (err) return -EFAULT;
     switch(cmd){
         case CD_IOCTL_SETBAUDRATE:
@@ -534,7 +526,7 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
             if (user_value < 50 || user_value > 115200) return -ENOTTY;
             if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
             _dev->serial.baud_rate = user_value;
-            // TODO: write_serial_config(_dev);
+            write_baud_rate(_dev);
             up(&_dev->sem);
             break;
         case CD_IOCTL_SETDATASIZE:
@@ -543,7 +535,7 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
             if (user_value < WLEN_5 || user_value > WLEN_8) return -ENOTTY;
             if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
             _dev->serial.word_len_selection = user_value;
-            // TODO: write_serial_config(_dev);
+            write_serial_wordlen_conf(_dev);
             up(&_dev->sem);
             break;
         case CD_IOCTL_SETPARITY:
@@ -559,11 +551,11 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
                 _dev->serial.parity_enabled = 1;
                 _dev->serial.parity_select = 1;
             }
-            // TODO: write_serial_config(_dev);
+            write_parity_conf(_dev);
             up(&_dev->sem);
             break;
         case CD_IOCTL_GETBUFSIZE:
-            retval = __put_user(_dev->buffer_size, (int __user*) arg); 
+            retval = __put_user(_dev->buffer_size, (int*) arg);
             break;
         case CD_IOCTL_SETBUFSIZE:
             if (!capable(CAP_SYS_ADMIN)) return -EPERM;
@@ -579,7 +571,9 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
 outsem:
             up(&_dev->sem);
             break;
-        default: return -ENOTTY;
+        default:
+        	retval= -ENOTTY;
+        	break;
     }
     return retval;
 }
