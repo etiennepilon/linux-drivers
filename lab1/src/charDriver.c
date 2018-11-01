@@ -94,22 +94,7 @@ static struct file_operations cd_fops = {
     .unlocked_ioctl = cd_ioctl
 };
 
-// -- SERIAL Functions --
-
-static int request_port(cd_dev* dev)
-{
-    if(!request_region(dev->serial.base_address, PORT_SIZE, "serial_0")){
-    	D printk(KERN_WARNING"Could not get serial port at address: %x", dev->serial.base_address);
-    	return -EBUSY;
-    }
-    return 0;
-}
-
-static void release_port(cd_dev* dev)
-{
-	release_region(dev->serial.base_address, PORT_SIZE);
-}
-
+// -- UTILITY Functions --
 static void set_bit_(unsigned short int base_addr, unsigned short int offset, unsigned char mask)
 {
     unsigned char value = inb(base_addr + offset);
@@ -131,6 +116,21 @@ static unsigned char check_flag_(unsigned short int base_addr, unsigned short in
 {
     unsigned char value = inb(base_addr + offset);
     return (value & mask) > 0;// Return 0 or 1
+}
+
+// -- SERIAL Functions --
+static int request_port(cd_dev* dev)
+{
+    if(!request_region(dev->serial.base_address, PORT_SIZE, "serial_0")){
+    	D printk(KERN_WARNING"Could not get serial port at address: %x", dev->serial.base_address);
+    	return -EBUSY;
+    }
+    return 0;
+}
+
+static void release_port(cd_dev* dev)
+{
+	release_region(dev->serial.base_address, PORT_SIZE);
 }
 
 static void write_serial_config(cd_dev *dev)
@@ -198,6 +198,27 @@ static void enable_serial_interupt(cd_dev* dev)
     set_bit_(dev->serial.base_address, IER, IER_ETBEI | IER_ERBFI);
 }
 
+
+static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
+{
+    int retval = 0;
+	dev->serial.baud_rate = BAUD_RATE;
+    dev->serial.parity_select = 0;
+    dev->serial.parity_enabled= 0;
+    dev->serial.stop_bit = 0;
+    dev->serial.word_len_selection=WLEN_8;
+    dev->serial.base_address = base_address;
+    dev->serial.irq_num = irq_num;
+    retval = request_port(dev);
+    if (retval < 0) return;
+    D printk(KERN_WARNING"Initialized device serial configs");
+    write_serial_config(dev);
+    D printk(KERN_WARNING"Wrote device serial configs to port");
+    enable_fifo(dev);
+    enable_serial_interupt(dev);
+    return;
+}
+
 static void write_to_port(cd_dev* dev)
 {
     unsigned char value = 0;
@@ -255,18 +276,16 @@ static irqreturn_t handler(int irq, void *data)
 		printk(KERN_DEBUG"Reception error on serial port");
 		return IRQ_HANDLED;
 	}
-	spin_lock(&dev->lock);
 	has_data_ready = check_flag_(dev->serial.base_address, LSR, LSR_DR);
 	is_ready_for_tx = check_flag_(dev->serial.base_address, LSR, LSR_THRE);
+
+	spin_lock(&dev->lock);
 	if (is_ready_for_tx && !cbuf_is_empty(dev->writer_cbuf))
 	{
-		//
 		write_to_port(dev);
-		//spin_unlock(&dev->lock);
 	}
 	if (has_data_ready && !cbuf_is_full(dev->reader_cbuf))
 	{
-		//spin_lock(&dev->lock);
 		read_port(dev);
 		wake_up_interruptible(&dev->wait_queue);
 	}
@@ -274,25 +293,7 @@ static irqreturn_t handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static void init_serial_port(cd_dev* dev, int irq_num, int base_address)
-{
-    int retval = 0;
-	dev->serial.baud_rate = BAUD_RATE;
-    dev->serial.parity_select = 0;
-    dev->serial.parity_enabled= 0;
-    dev->serial.stop_bit = 0;
-    dev->serial.word_len_selection=WLEN_8;
-    dev->serial.base_address = base_address;
-    dev->serial.irq_num = irq_num;
-    retval = request_port(dev);
-    if (retval < 0) return;
-    D printk(KERN_WARNING"Initialized device serial configs");
-    write_serial_config(dev);
-    D printk(KERN_WARNING"Wrote device serial configs to port");
-    enable_fifo(dev);
-    enable_serial_interupt(dev);
-    return;
-}
+
 
 // -- Private methods --
 static cd_dev* cd_dev_create(int irq_num, int base_address){
