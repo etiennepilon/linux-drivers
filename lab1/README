@@ -11,11 +11,27 @@ Check for IRQ numbers and serial address on the system with the command
 ```
 setserial -g /dev/ttyS[56]
 ```
-In order to load/reload the module into the kernel, simply use:
+
+If there are drivers using the serial ports, use `rmmod`.
+
+In order to load the module:
+```
+make && sudo insmod lab1.ko
+```
+In order to reload the module into the kernel, simply use:
 ```
 sh reload.sh
 ```
 
+# User Application
+To compile:
+```
+gcc test_char_driver.c -o app
+```
+To execute:
+```
+./app
+```
 # Tests
 To compile the tests:
 ```
