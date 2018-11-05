@@ -332,7 +332,6 @@ static void cd_dev_destroy(cd_dev* dev){
     kfree(dev);
 }
 
-// TODO: Wait event queue with timeout to test in/out of serial port
 // -- File operations --
 static int __init cd_init(void){
     int result;
@@ -560,7 +559,7 @@ static long cd_ioctl(struct file* flip, unsigned int cmd, unsigned long arg){
         case CD_IOCTL_SETBUFSIZE:
             if (!capable(CAP_SYS_ADMIN)) return -EPERM;
             retval = __get_user(new_size, (int __user*) arg);
-            if (retval < 0) return retval;
+            if (retval < 0) goto outsem;
             if (new_size < 128 || new_size > MAX_BUFFER_SIZE) return -ENOTTY;
             if(down_interruptible(&_dev->sem)) return -ERESTARTSYS;
             retval = cbuf_resize(_dev->reader_cbuf, new_size);
