@@ -45,13 +45,13 @@ module_exit(usb_cam_exit);
 
 // -- Program stuctures --
 // My usb Device
-// TODO: Add components
 struct my_usb_cam_dev {
     struct usb_device *usb_dev;
     struct usb_interface *usb_cam_intf;
-}
+};
 
-struct file_operations usbcam_fops = {
+// fops
+struct file_operations usb_cam_fops = {
 	.owner          = THIS_MODULE,
 	.open           = usb_cam_open,
 	.release        = usb_cam_release,
@@ -60,17 +60,41 @@ struct file_operations usbcam_fops = {
 	.unlocked_ioctl = usb_cam_ioctl,
 }
 
+// table
+static struct usb_device_id usb_cam_table [] = {
+	{USB_DEVICE(0x046d, 0x08cc)},
+	{}
+};
+MODULE_DEVICE_TABLE(usb, usb_cam_table);
+
+// driver
+static struct usb_driver usb_cam_driver = {
+	.name       = "usb_cam",
+	.id_table   = usb_cam_table,
+	.probe      = usb_cam_probe,
+	.disconnect = usb_cam_disconnect,
+};
+
 // -- Program Variables --
 // TODO
 
 static int __init usb_cam_init(void)
 {
 	int retval = 0;
+	retval = usb_register(&usb_cam_driver);
+	if (retval)
+	{
+		printk(KERN_ERR"USB CAM INIT -- ERROR registering: %d\n", retval);
+		return retval;
+	}
+	printk(KERN_WARNING"USB CAM INIT -- Registered\n");
 	return retval;
 }
+
 static void __exit usb_cam_exit(void)
 {
-	//TODO
+	printk(KERN_WARNING"USB CAM EXIT -- Deregistered\n");
+	usb_deregister(&usb_cam_driver);
 }
 static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id *devid)
 {
