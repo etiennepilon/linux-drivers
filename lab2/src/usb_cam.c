@@ -203,7 +203,7 @@ static void usb_cam_disconnect(struct usb_interface *intf)
 
 static int usb_cam_open (struct inode *inode, struct file *filp)
 {
-	//TODO: Handle single opening if necessary
+	//TODO: Handle single opening + O_RDONLY flag if necessary
 	int retval = 0;
 	struct usb_interface *intf;
 
@@ -225,19 +225,182 @@ static int usb_cam_release (struct inode *inode, struct file *filp)
 	//TODO: Handle single opening if necessary
 	return retval;
 }
+
 static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count, loff_t *f_ops)
 {
 	int retval = 0;
 	return retval;
 }
+
 static ssize_t usb_cam_write (struct file *filp, const char __user *ubuf, size_t count, loff_t *f_ops)
 {
 	int retval = 0;
 	return retval;
 }
+
 static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	int retval = 0;
-	return retval;
+	int retval = 0, user_req = 0;
+	struct usb_interface *intf = filp->private_data;
+    struct usb_cam_dev *cam = usb_get_intfdata(intf);
+    int direction = 0;
+    char cam_position[4] = {0};
+    char pantilt_reset_value = 0x03;
+
+    printk(KERN_WARNING"USB CAM IOCTL CALL\n");
+
+    switch(cmd)
+    {
+        case IOCTL_STREAMON:
+            printk(KERN_WARNING"- STREAMON command received\n");
+            retval = usb_control_msg(
+                cam->usb_dev,
+                usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
+                0x0B,
+                (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_INTERFACE),
+                0x0004,
+                0x0001,
+                NULL,
+                0,
+                0);
+            if (retval < 0)
+            {
+                printk(KERN_ERR"- Error sending control msg in STREAMON cmd\n");
+                return retval;
+            }
+        break;
+        case IOCTL_STREAMOFF:
+            printk(KERN_WARNING"- STREAMOFF command received\n");
+            retval = usb_control_msg(
+                cam->usb_dev,
+                usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
+                0x0B,
+                (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_INTERFACE),
+                0x0000,
+                0x0001,
+                NULL,
+                0,
+                0);
+            if (retval < 0)
+            {
+                printk(KERN_ERR"- Error sending control msg in STREAMOFF cmd\n");
+                return retval;
+            }
+        break;
+        case IOCTL_PANTILT:
+
+            printk(KERN_WARNING"- PANTILT command received\n");
+            
+            __get_user(direction, (unsigned int __user *) arg);
+
+            switch(direction)
+            {
+                case 0: //UP
+                    printk(KERN_WARNING"- Going up\n");
+                    cam_position[0] = 0x00;
+                    cam_position[1] = 0x00;
+                    cam_position[2] = 0x80;
+                    cam_position[3] = 0xFF;
+                break;
+                case 1: //DOWN
+                    printk(KERN_WARNING"- Going down\n");
+                    cam_position[0] = 0x00;
+                    cam_position[1] = 0x00;
+                    cam_position[2] = 0x80;
+                    cam_position[3] = 0x00;
+                break;
+                case 2: //LEFT
+                    printk(KERN_WARNING"- Going left\n");
+                    cam_position[0] = 0x80;
+                    cam_position[1] = 0x00;
+                    cam_position[2] = 0x00;
+                    cam_position[3] = 0x00;
+                break;
+                case 3: //RIGHT
+                    printk(KERN_WARNING"- Going right\n");
+                    cam_position[0] = 0x80;
+                    cam_position[1] = 0xFF;
+                    cam_position[2] = 0x00;
+                    cam_position[3] = 0x00;
+                break;
+                default:
+                    printk(KERN_ERR"- received invalid command\n");
+                    return -1;
+                break;
+            }
+            retval = usb_control_msg(
+                cam->usb_dev,
+                usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
+                0x01,
+                (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_INTERFACE),
+                0x0100,
+                0x0900,
+                &cam_position,
+                4,
+                0);
+            if (retval < 0)
+            {
+                printk(KERN_ERR"- Error sending control msg in PANTILT cmd\n");
+                return retval;
+            }
+            
+        break;
+        case IOCTL_PANTILT_RESET:
+            printk(KERN_WARNING"- PANTILT_RESET command received\n");
+            
+            retval = usb_control_msg(
+                cam->usb_dev,
+                usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
+                0x01,
+                (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_INTERFACE),
+                0x0200,
+                0x0900,
+                &pantilt_reset_value,
+                1,
+                0);
+            if (retval < 0)
+            {
+                printk(KERN_ERR"- Error sending control msg in PANTILT_RESET cmd\n");
+                return retval;
+            }
+            
+        break;
+        /*
+        case IOCTL_GET:
+            unsigned char request = 0;
+
+            printk(KERN_WARNING"- GET command received\n");
+            __get_user(request, (unsigned char __user *) arg);
+            if (request != GET_CUR && request != GET_MIN && request != GET_MAX && request != GET_RES)
+            {
+                printk(KERN_WARNING"- Invalid command in GET\n");
+                return -EINVAL;
+            }
+            retval = usb_control_msg(
+                cam->usb_dev,
+                usb_rcvctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
+                request,
+                (USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE),
+                0,
+                0x0200,
+                NULL,
+                2,
+                0);
+            if (retval < 0)
+            {
+                printk(KERN_ERR"- Error sending control msg in PANTILT_RESET cmd\n");
+                return retval;
+            }
+
+        break;
+        */
+        default:
+            printk(KERN_WARNING"- Received invalid command\n");
+            return -EINVAL;
+        break;
+    }
+    
+
+    return retval;
 }
 
