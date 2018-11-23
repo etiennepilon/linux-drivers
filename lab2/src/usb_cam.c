@@ -91,7 +91,11 @@ static struct usb_class_driver usb_cam_class = {
 };
 
 // -- Program Variables --
-// TODO
+// See lab document
+unsigned int myStatus = 0;
+unsigned int myLength = 42666;
+unsigned int myLengthUsed = 0;
+
 
 static int __init usb_cam_init(void)
 {
@@ -140,8 +144,8 @@ static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id
 	}
 	else
 	{
-		printk(KERN_ERR"- unsupported interface class detected, returning.\n");
-		return retval;
+		printk(KERN_WARNING"- unsupported interface class detected: class value %x\n", intf->altsetting->desc.bInterfaceClass);
+		return 0;
 	}
 	if (streaming_intf_detected)
 	{
@@ -179,6 +183,7 @@ static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id
 	}
 	return retval;
 }
+
 static void usb_cam_disconnect(struct usb_interface *intf)
 {
 	struct usb_cam_dev *dev;
@@ -195,14 +200,29 @@ static void usb_cam_disconnect(struct usb_interface *intf)
 		}
 	}
 }
+
 static int usb_cam_open (struct inode *inode, struct file *filp)
 {
+	//TODO: Handle single opening if necessary
 	int retval = 0;
+	struct usb_interface *intf;
+
+	printk(KERN_WARNING"USB CAM OPEN\n");
+	intf = usb_find_interface(&usb_cam_driver, iminor(inode));
+	if (intf == NULL)
+	{
+		printk(KERN_ERR"- can't find interface for usb cam driver\n");
+		return -ENODEV;
+	}
+	filp->private_data = intf;
 	return retval;
 }
+
 static int usb_cam_release (struct inode *inode, struct file *filp)
 {
 	int retval = 0;
+	printk(KERN_WARNING"USB CAM RELEASE\n");
+	//TODO: Handle single opening if necessary
 	return retval;
 }
 static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count, loff_t *f_ops)
