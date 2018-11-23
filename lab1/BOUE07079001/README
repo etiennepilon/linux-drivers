@@ -1,0 +1,33 @@
+# Setup
+
+Check for IRQ numbers and serial address on the system with the command
+```
+setserial -g /dev/ttyS[56]
+```
+
+If there are drivers using the serial ports, use `rmmod`.
+
+In order to load the module:
+```
+make && sudo insmod lab1.ko
+```
+
+# User Application
+To compile:
+```
+gcc test_char_driver.c -o app
+```
+To execute:
+```
+./app
+```
+# Tests
+To compile the tests:
+```
+cd test && gcc test_char_driver.c -o unit_test -lpthread
+./unit_test
+```
+# Note
+Je n'ai pas respectee les specs a deux endroits car bug:
+* Desactivation/activation des interupts lorsque le tx buffer est vide
+* Request_interupts dans le open/release (dans le init)
