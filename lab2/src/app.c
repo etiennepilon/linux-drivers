@@ -5,13 +5,40 @@
 #include <sys/ioctl.h>
 #include <string.h>
 #include "usb_cam.h"
+#include "dht_data.h"
 
 #define USB_HANDLE "/dev/etsele_cdev0"
+#define DEFAULT_PATH "/home/ens/AK58050/workspaces/linux-drivers/lab2/src/pics/selfie.jpg"
+
+unsigned char inBuffer[42666];
+unsigned char finalBuffer[42666 * 2];
+
+int take_picture(int usb_fd, FILE* pic_fd)
+{
+	int mySize = 0, retval = 0;
+	mySize = read(usb_fd, inBuffer, 42666);
+	if (mySize < 0)
+	{
+		printf("Error reading from usb cam\n");
+		return -1;
+	}
+	retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMOFF);
+	if (retval < 0) return -1;
+	memcpy(finalBuffer, inBuffer, HEADERFRAME1);
+	memcpy(finalBuffer + HEADERFRAME1, dht_data, DHT_SIZE);
+	memcpy(finalBuffer + HEADERFRAME1 + DHT_SIZE,
+		inBuffer + HEADERFRAME1,
+		(mySize - HEADERFRAME1));
+	fwrite(finalBuffer, mySize + DHT_SIZE, 1, pic_fd);
+	return 0;
+}
 
 int main(int argc, char* argv[])
 {
 	int retval = 0;
 	int usb_fd = 0;
+	FILE* pic_fd;
+	
 	usb_fd = open(USB_HANDLE, O_RDONLY);
 	if (argc < 2)
 	{
@@ -32,6 +59,20 @@ int main(int argc, char* argv[])
 	{
 		retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMOFF);
 	}
+	else if (strcmp(argv[1], "selfie") == 0)
+	{
+		pic_fd = argc >= 3 ? fopen(argv[2], "wb") : fopen(DEFAULT_PATH, "wb");
+		if (pic_fd == NULL)
+		{
+			printf("Error: Can't open picture file\n");
+			return 0;
+		}
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMON);
+		if (retval < 0) goto out;
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_GRAB);
+		if (retval < 0) goto out;
+		take_picture(usb_fd, pic_fd);
+	}
 	else
 	{
 		printf("Received invalid command %s\n", argv[1]);
@@ -40,6 +81,8 @@ int main(int argc, char* argv[])
 	{
 		printf("Error executing command %s\n", argv[1]);
 	}
+out:
 	close(usb_fd);
+	fclose(pic_fd);
 	return retval;
 }
