@@ -472,6 +472,8 @@ int _my_urb_init(struct urb *urb, struct usb_interface *intf)
   dev = usb_cam_dev->usb_dev;
   
   // -- Copy paste from Doc --
+  myStatus = 0;
+  myLengthUsed = 0;
   nbPackets = 40;  // The number of isochronous packets this urb should contain
   myPacketSize = le16_to_cpu(endpointDesc.wMaxPacketSize);
   size = myPacketSize * nbPackets;
