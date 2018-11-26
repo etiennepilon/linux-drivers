@@ -179,7 +179,7 @@ static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id
 		usb_set_interface(my_usb_dev->usb_dev, 1, 4);
 		// -- URB Synchronization stuff --
 		// TODO: Validate if this is necessary. It seems to lock my kernel when I don't do it.
-		my_usb_dev->urb_completed = (struct completion *) kmalloc(sizeof(struct completion), GFP_KERNEL);
+		//my_usb_dev->urb_completed = (struct completion *) kmalloc(sizeof(struct completion), GFP_KERNEL);
 		init_completion(my_usb_dev->urb_completed);
 		if(my_usb_dev->urb_completed == NULL)
 		{
@@ -236,6 +236,22 @@ static int usb_cam_release (struct inode *inode, struct file *filp)
 	printk(KERN_WARNING"USB CAM RELEASE\n");
 	//TODO: Handle single opening if necessary
 	return retval;
+}
+
+static void _clear_urbs(struct usb_interface *intf)
+{
+	int i = 0;
+	struct usb_cam_dev* cam = usb_get_intfdata(intf);
+	for (i = 0; i < NB_URBS; i ++)
+	{
+		usb_kill_urb(cam->urbs[i]);
+		usb_free_coherent(
+				cam->usb_dev,
+				cam->urbs[i]->transfer_buffer_length,
+				cam->urbs[i]->transfer_buffer,
+				cam->urbs[i]->transfer_dma);
+		usb_free_urb(cam->urbs[i]);
+	}
 }
 
 static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count, loff_t *f_ops)
@@ -458,7 +474,7 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
         		printk(KERN_ERR"- Error initialization urbs\n");
         		return retval;
         	}
-        	printk(KERN_WARNING"- Initialized urbs\n");
+        	printk(KERN_WARNING"- Initialized urbs %d\n", (int) atomic_read(&cam->urb_counter));
         break;
         /* TODO: Not sure how to do both read and write. To validate
         case USB_CAM_IOCTL_GET:
@@ -513,6 +529,12 @@ int _my_urb_init(struct usb_interface *intf)
   endpointDesc = cur_altsetting->endpoint[0].desc;
   
   cam_dev = usb_get_intfdata(intf);
+  
+  if (cam_dev == NULL)
+  {
+	  printk(KERN_ERR"Cannot get device from interface\n");
+	  return -1;
+  }
   dev = cam_dev->usb_dev;
   
   // -- Copy paste from Doc --
@@ -527,7 +549,7 @@ int _my_urb_init(struct usb_interface *intf)
   {
     usb_free_urb(cam_dev->urbs[i]);
     // TODO: GFP_ATOMIC: Not sure of the logic, flags they are using in the doc
-    cam_dev->urbs[i] = usb_alloc_urb(nbPackets, GFP_ATOMIC);
+    cam_dev->urbs[i] = usb_alloc_urb(nbPackets, GFP_KERNEL);
     if (cam_dev->urbs[i] == NULL)
     {
       printk(KERN_ERR "USB CAM URB INIT - Error allocating urb memory\n");
@@ -562,14 +584,16 @@ int _my_urb_init(struct usb_interface *intf)
     	cam_dev->urbs[i]->iso_frame_desc[j].length = myPacketSize;
     }
   }
-
+  
   for(i = 0; i < nbUrbs; ++i)
   {
-    if ((retval = usb_submit_urb(cam_dev->urbs[i], GFP_ATOMIC)) < 0)
-    {
-      printk(KERN_ERR "USB CAM URB INIT - Error submitting urb\n");
-      return retval;
-    }
+	  printk("Blows up at : %d", i);
+	  retval = usb_submit_urb(cam_dev->urbs[i], GFP_KERNEL);
+	  if (retval < 0)
+	  {
+		printk(KERN_ERR "USB CAM URB INIT - Error submitting urb %d\n", retval);
+		return retval; 
+	  }
   }
   return 0;
 }
@@ -586,6 +610,11 @@ static void _urb_callback(struct urb *urb)
 	struct usb_cam_dev* cam_dev;
 	
 	cam_dev = (struct usb_cam_dev*) urb->context;
+	if (cam_dev == NULL)
+	{
+		printk(KERN_ERR"Cannot get device from context\n");
+		return;
+	}
 	if(urb->status == 0){
 		
 		for (i = 0; i < urb->number_of_packets; ++i) {
@@ -640,3 +669,5 @@ static void _urb_callback(struct urb *urb)
 		printk(KERN_ERR"URB CALLBACK - Error in callback with status %d\n", urb->status);
 	}
 }
+
+// https://www.kernel.org/doc/html/v4.15/driver-api/usb/URB.html
