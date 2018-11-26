@@ -22,7 +22,7 @@ int take_picture(int usb_fd, FILE* pic_fd)
 		printf("Error reading from usb cam\n");
 		return -1;
 	}
-	retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMOFF);
+	
 	if (retval < 0) return -1;
 	memcpy(finalBuffer, inBuffer, HEADERFRAME1);
 	memcpy(finalBuffer + HEADERFRAME1, dht_data, DHT_SIZE);
@@ -35,7 +35,7 @@ int take_picture(int usb_fd, FILE* pic_fd)
 
 int main(int argc, char* argv[])
 {
-	int retval = 0;
+	int retval = 0, direction = 0;
 	int usb_fd = 0;
 	FILE* pic_fd;
 	
@@ -71,7 +71,34 @@ int main(int argc, char* argv[])
 		if (retval < 0) goto out;
 		retval = ioctl(usb_fd, USB_CAM_IOCTL_GRAB);
 		if (retval < 0) goto out;
-		take_picture(usb_fd, pic_fd);
+		//take_picture(usb_fd, pic_fd);
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMOFF);
+out:
+		fclose(pic_fd);
+	}
+	else if (strcmp(argv[1], "right") == 0)
+	{
+		direction = TILT_RIGHT;
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_PANTILT, &direction);
+	}
+	else if (strcmp(argv[1], "left") == 0)
+	{
+		direction = TILT_LEFT;
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_PANTILT, &direction);
+	}
+	else if (strcmp(argv[1], "up") == 0)
+	{
+		direction = TILT_UP;
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_PANTILT, &direction);
+	}
+	else if (strcmp(argv[1], "down") == 0)
+	{
+		direction = TILT_DOWN;
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_PANTILT, &direction);
+	}
+	else if (strcmp(argv[1], "reset") == 0)
+	{
+		retval = ioctl(usb_fd, USB_CAM_IOCTL_PANTILT_RESET);
 	}
 	else
 	{
@@ -81,8 +108,7 @@ int main(int argc, char* argv[])
 	{
 		printf("Error executing command %s\n", argv[1]);
 	}
-out:
+
 	close(usb_fd);
-	fclose(pic_fd);
 	return retval;
 }

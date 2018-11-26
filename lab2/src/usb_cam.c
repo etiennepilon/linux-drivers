@@ -179,7 +179,7 @@ static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id
 		usb_set_interface(my_usb_dev->usb_dev, 1, 4);
 		// -- URB Synchronization stuff --
 		// TODO: Validate if this is necessary. It seems to lock my kernel when I don't do it.
-		//my_usb_dev->urb_completed = (struct completion *) kmalloc(sizeof(struct completion), GFP_KERNEL);
+		my_usb_dev->urb_completed = (struct completion *) kmalloc(sizeof(struct completion), GFP_KERNEL);
 		init_completion(my_usb_dev->urb_completed);
 		if(my_usb_dev->urb_completed == NULL)
 		{
@@ -296,9 +296,9 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
 	struct usb_interface *intf = filp->private_data;
     struct usb_cam_dev *cam = usb_get_intfdata(intf);
     int direction = 0;
-    char cam_position[4] = {0};
-    char set_data[2] = {0};
-    char pantilt_reset_value = 0x03;
+    static char cam_position[4] = {0};
+    static char set_data[2] = {0};
+    static char pantilt_reset_value = 0x03;
 
     printk(KERN_WARNING"USB CAM IOCTL CALL\n");
     
@@ -368,28 +368,28 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
             }
             switch(direction)
             {
-                case 0: //UP
+                case TILT_UP: //UP
                     printk(KERN_WARNING"- Going up\n");
                     cam_position[0] = 0x00;
                     cam_position[1] = 0x00;
                     cam_position[2] = 0x80;
                     cam_position[3] = 0xFF;
                 break;
-                case 1: //DOWN
+                case TILT_DOWN: //DOWN
                     printk(KERN_WARNING"- Going down\n");
                     cam_position[0] = 0x00;
                     cam_position[1] = 0x00;
                     cam_position[2] = 0x80;
                     cam_position[3] = 0x00;
                 break;
-                case 2: //LEFT
+                case TILT_LEFT: //LEFT
                     printk(KERN_WARNING"- Going left\n");
                     cam_position[0] = 0x80;
                     cam_position[1] = 0x00;
                     cam_position[2] = 0x00;
                     cam_position[3] = 0x00;
                 break;
-                case 3: //RIGHT
+                case TILT_RIGHT: //RIGHT
                     printk(KERN_WARNING"- Going right\n");
                     cam_position[0] = 0x80;
                     cam_position[1] = 0xFF;
@@ -405,7 +405,7 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
                 cam->usb_dev,
                 usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
                 0x01,
-                (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_INTERFACE),
+                (USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE),
                 0x0100,
                 0x0900,
                 &cam_position,
@@ -425,7 +425,7 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
                 cam->usb_dev,
                 usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
                 0x01,
-                (USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_INTERFACE),
+                (USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE),
                 0x0200,
                 0x0900,
                 &pantilt_reset_value,
@@ -549,7 +549,7 @@ int _my_urb_init(struct usb_interface *intf)
   {
     usb_free_urb(cam_dev->urbs[i]);
     // TODO: GFP_ATOMIC: Not sure of the logic, flags they are using in the doc
-    cam_dev->urbs[i] = usb_alloc_urb(nbPackets, GFP_KERNEL);
+    cam_dev->urbs[i] = usb_alloc_urb(nbPackets, GFP_ATOMIC);
     if (cam_dev->urbs[i] == NULL)
     {
       printk(KERN_ERR "USB CAM URB INIT - Error allocating urb memory\n");
@@ -557,7 +557,7 @@ int _my_urb_init(struct usb_interface *intf)
     }
     // Error in doc: usb_buffer_alloc => usb_alloc_coherent
     cam_dev->urbs[i]->transfer_buffer = usb_alloc_coherent(
-    		dev, size, GFP_KERNEL, &cam_dev->urbs[i]->transfer_dma);
+    		dev, size, GFP_ATOMIC, &cam_dev->urbs[i]->transfer_dma);
     if (cam_dev->urbs[i]->transfer_buffer == NULL)
     {
       printk(KERN_ERR "USB CAM URB INIT - Error allocating urb DMA\n");
@@ -616,55 +616,55 @@ static void _urb_callback(struct urb *urb)
 		return;
 	}
 	if(urb->status == 0){
-		
-		for (i = 0; i < urb->number_of_packets; ++i) {
-			if(myStatus == 1){
-				continue;
-			}
-			if (urb->iso_frame_desc[i].status < 0) {
-				continue;
-			}
-			
-			data = urb->transfer_buffer + urb->iso_frame_desc[i].offset;
-			if(data[1] & (1 << 6)){
-				continue;
-			}
-			len = urb->iso_frame_desc[i].actual_length;
-			if (len < 2 || data[0] < 2 || data[0] > len){
-				continue;
-			}
-		
-			len -= data[0];
-			maxlen = myLength - myLengthUsed ;
-			mem = myData + myLengthUsed;
-			nbytes = min(len, maxlen);
-			memcpy(mem, data + data[0], nbytes);
-			myLengthUsed += nbytes;
-	
-			if (len > maxlen) {				
-				myStatus = 1; // DONE
-			}
-	
-			/* Mark the buffer as done if the EOF marker is set. */
-			if ((data[1] & (1 << 1)) && (myLengthUsed != 0)) {						
-				myStatus = 1; // DONE
-			}					
-		}
-	
-		if (!(myStatus == 1)){				
-			if ((ret = usb_submit_urb(urb, GFP_ATOMIC)) < 0) {
-				printk(KERN_ERR"URB CALLBACK - Error submitting URB\n");
-			}
-		}else{
-			// TODO: Validate understanding - We want all five urbs to be filled before triggering read
-			myStatus = 0;
-			atomic_inc(&cam_dev->urb_counter);
-			if((int) atomic_read(&cam_dev->urb_counter) == NB_URBS)
-			{
-				atomic_set(&cam_dev->urb_counter, 0);
-				complete(cam_dev->urb_completed);
-			}
-		}
+//		
+//		for (i = 0; i < urb->number_of_packets; ++i) {
+//			if(myStatus == 1){
+//				continue;
+//			}
+//			if (urb->iso_frame_desc[i].status < 0) {
+//				continue;
+//			}
+//			
+//			data = urb->transfer_buffer + urb->iso_frame_desc[i].offset;
+//			if(data[1] & (1 << 6)){
+//				continue;
+//			}
+//			len = urb->iso_frame_desc[i].actual_length;
+//			if (len < 2 || data[0] < 2 || data[0] > len){
+//				continue;
+//			}
+//		
+//			len -= data[0];
+//			maxlen = myLength - myLengthUsed ;
+//			mem = myData + myLengthUsed;
+//			nbytes = min(len, maxlen);
+//			memcpy(mem, data + data[0], nbytes);
+//			myLengthUsed += nbytes;
+//	
+//			if (len > maxlen) {				
+//				myStatus = 1; // DONE
+//			}
+//	
+//			/* Mark the buffer as done if the EOF marker is set. */
+//			if ((data[1] & (1 << 1)) && (myLengthUsed != 0)) {						
+//				myStatus = 1; // DONE
+//			}					
+//		}
+//	
+//		if (!(myStatus == 1)){				
+//			if ((ret = usb_submit_urb(urb, GFP_ATOMIC)) < 0) {
+//				printk(KERN_ERR"URB CALLBACK - Error submitting URB\n");
+//			}
+//		}else{
+//			// TODO: Validate understanding - We want all five urbs to be filled before triggering read
+//			myStatus = 0;
+//			atomic_inc(&cam_dev->urb_counter);
+//			if((int) atomic_read(&cam_dev->urb_counter) == NB_URBS)
+//			{
+//				atomic_set(&cam_dev->urb_counter, 0);
+//				complete(cam_dev->urb_completed);
+//			}
+//		}
 	}else{
 		printk(KERN_ERR"URB CALLBACK - Error in callback with status %d\n", urb->status);
 	}

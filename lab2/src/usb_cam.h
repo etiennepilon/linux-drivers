@@ -17,4 +17,10 @@
 
 #define USB_CAM_IOC_MAXNR 0x70
 
+#define TILT_UP 0
+#define TILT_DOWN 1
+#define TILT_LEFT 2
+#define TILT_RIGHT 3
+
+
 #endif
