@@ -77,7 +77,7 @@ MODULE_DEVICE_TABLE(usb, usb_cam_table);
 
 // driver
 static struct usb_driver usb_cam_driver = {
-	.name       = "usb_cam",
+	.name       = "usbcam",
 	.id_table   = usb_cam_table,
 	.probe      = usb_cam_probe,
 	.disconnect = usb_cam_disconnect,
@@ -85,7 +85,7 @@ static struct usb_driver usb_cam_driver = {
 
 // class
 static struct usb_class_driver usb_cam_class = {
-	.name       = "usb/usb_cam%d",
+	.name       = "usb/usbcam%d",
 	.fops       = &usb_cam_fops,
 	.minor_base = MINOR_NUM,
 };
@@ -248,10 +248,27 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
     char pantilt_reset_value = 0x03;
 
     printk(KERN_WARNING"USB CAM IOCTL CALL\n");
+    
+    if(_IOC_TYPE(cmd) != USB_CAM_IOC_MAGIC || _IOC_NR(cmd) > USB_CAM_IOC_MAXNR)
+    {
+    	printk(KERN_ERR"- Error: received invalid IOCTL command\n");
+    	return -ENOTTY;
+    }
+    
+    if(_IOC_DIR(cmd) & _IOC_WRITE)
+    	retval =  !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
+    else if(_IOC_DIR(cmd) & _IOC_READ)
+    	retval = !access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
+    if(retval)
+    {
+    	printk(KERN_ERR"- Error: Can't access user variables\n");
+        return -EFAULT;
+    }
 
+    
     switch(cmd)
     {
-        case IOCTL_STREAMON:
+        case USB_CAM_IOCTL_STREAMON:
             printk(KERN_WARNING"- STREAMON command received\n");
             retval = usb_control_msg(
                 cam->usb_dev,
@@ -269,7 +286,7 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
                 return retval;
             }
         break;
-        case IOCTL_STREAMOFF:
+        case USB_CAM_IOCTL_STREAMOFF:
             printk(KERN_WARNING"- STREAMOFF command received\n");
             retval = usb_control_msg(
                 cam->usb_dev,
@@ -287,7 +304,7 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
                 return retval;
             }
         break;
-        case IOCTL_PANTILT:
+        case USB_CAM_IOCTL_PANTILT:
 
             printk(KERN_WARNING"- PANTILT command received\n");
             
@@ -345,7 +362,7 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
             }
             
         break;
-        case IOCTL_PANTILT_RESET:
+        case USB_CAM_IOCTL_PANTILT_RESET:
             printk(KERN_WARNING"- PANTILT_RESET command received\n");
             
             retval = usb_control_msg(

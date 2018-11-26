@@ -1,8 +1,19 @@
-// -- IOCTL Defines from Doc --
-#define IOCTL_GET               0x10
-#define IOCTL_SET              0x20
-#define IOCTL_STREAMON         0x30
-#define IOCTL_STREAMOFF        0x40
-#define IOCTL_GRAB             0x50
-#define IOCTL_PANTILT          0x60
-#define IOCTL_PANTILT_RESET    0x70 
+#ifndef USB_CAM_H_
+#define USB_CAM_H_
+
+// -- IOCTLs --
+// Mostly from docs and notes
+
+#define USB_CAM_IOC_MAGIC  'Z'
+
+#define USB_CAM_IOCTL_GET 			   _IOWR(USB_CAM_IOC_MAGIC, 0x10, int)
+#define USB_CAM_IOCTL_SET 			   _IOW(USB_CAM_IOC_MAGIC, 0x20, int)
+#define USB_CAM_IOCTL_STREAMON         _IO(USB_CAM_IOC_MAGIC, 0x30)
+#define USB_CAM_IOCTL_STREAMOFF        _IO(USB_CAM_IOC_MAGIC, 0x40)
+#define USB_CAM_IOCTL_GRAB             _IO(USB_CAM_IOC_MAGIC, 0x50)
+#define USB_CAM_IOCTL_PANTILT          _IOW(USB_CAM_IOC_MAGIC, 0x60, int)
+#define USB_CAM_IOCTL_PANTILT_RESET    _IO(USB_CAM_IOC_MAGIC, 0x70)
+
+#define USB_CAM_IOC_MAXNR 0x70
+
+#endif
