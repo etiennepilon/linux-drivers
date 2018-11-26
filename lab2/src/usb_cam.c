@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
+#include <linux/uaccess.h>
 #include <uapi/asm-generic/errno-base.h>
 #include <linux/fcntl.h>
 #include <uapi/asm-generic/fcntl.h>
@@ -20,7 +21,7 @@
 #include <linux/completion.h>
 #include "usb_cam.h"
 #include "usbvideo.h"
-#include "dht_data.h"
+//#include "dht_data.h"
 
 // -- Module Basic Information --
 MODULE_AUTHOR("Etienne Boudreault-Pilon");
@@ -239,7 +240,8 @@ static int usb_cam_release (struct inode *inode, struct file *filp)
 
 static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count, loff_t *f_ops)
 {
-	int retval = 0;
+	int i = 0;
+	unsigned long bytes_not_copied_count = 0;
 	struct usb_interface *intf;
 	struct usb_cam_dev* cam;
 	
@@ -251,8 +253,19 @@ static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count,
 	printk(KERN_WARNING"- Waiting for URB completion\n");
 	wait_for_completion(cam->urb_completed);
 	
-	
-	return retval;
+	bytes_not_copied_count = copy_to_user(ubuf, myData, myLengthUsed);
+	for (i = 0; i < NB_URBS; i ++)
+	{
+		usb_kill_urb(cam->urbs[i]);
+		usb_free_coherent(
+				cam->usb_dev,
+				cam->urbs[i]->transfer_buffer_length,
+				cam->urbs[i]->transfer_buffer,
+				cam->urbs[i]->transfer_dma);
+		usb_free_urb(cam->urbs[i]);
+	}
+	// Returns the number of bytes read
+	return myLengthUsed - bytes_not_copied_count;
 }
 
 static ssize_t usb_cam_write (struct file *filp, const char __user *ubuf, size_t count, loff_t *f_ops)
@@ -527,7 +540,10 @@ int _my_urb_init(struct usb_interface *intf)
     {
       printk(KERN_ERR "USB CAM URB INIT - Error allocating urb DMA\n");
       usb_free_coherent(
-    		  dev, size, &endpointDesc.bEndpointAddress, cam_dev->urbs[i]->transfer_dma);
+    		  dev,
+			  size,
+			  cam_dev->urbs[i]->transfer_buffer,
+			  cam_dev->urbs[i]->transfer_dma);
       return -ENOMEM;
     }
 
