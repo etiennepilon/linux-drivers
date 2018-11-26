@@ -240,11 +240,12 @@ static ssize_t usb_cam_write (struct file *filp, const char __user *ubuf, size_t
 
 static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	int retval = 0, user_req = 0;
+	int retval = 0, user_value = 0;
 	struct usb_interface *intf = filp->private_data;
     struct usb_cam_dev *cam = usb_get_intfdata(intf);
     int direction = 0;
     char cam_position[4] = {0};
+    char set_data[2] = {0};
     char pantilt_reset_value = 0x03;
 
     printk(KERN_WARNING"USB CAM IOCTL CALL\n");
@@ -308,8 +309,11 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
 
             printk(KERN_WARNING"- PANTILT command received\n");
             
-            __get_user(direction, (unsigned int __user *) arg);
-
+            retval = __get_user(direction, (unsigned int __user *) arg);
+            if (retval < 0)
+            {
+            	printk(KERN_WARNING"- Error getting user direction value\n");
+            }
             switch(direction)
             {
                 case 0: //UP
@@ -382,8 +386,37 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
             }
             
         break;
+        case USB_CAM_IOCTL_SET:
+            printk(KERN_WARNING"- SET command received\n");
+            //TODO: Retrieve index, value, and data from user program.
+            // INCOMPLETE
+            retval = __get_user(user_value, (unsigned int __user *) arg);
+            if (retval < 0)
+            {
+            	printk(KERN_WARNING"- Error getting user direction value\n");
+            }
+            set_data[0] = user_value & 0xFF;
+            set_data[1] = (user_value >> 8) & 0xFF; 
+            // TODO: Cast into two chars the user value
+            retval = usb_control_msg(
+                cam->usb_dev,
+                usb_sndctrlpipe(cam->usb_dev, cam->usb_dev->ep0.desc.bEndpointAddress),
+                0x01,
+                (USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE),
+                0, // TODO: WTF is this
+                0x0200,
+				set_data,
+                2,
+                0);
+            if (retval < 0)
+            {
+                printk(KERN_ERR"- Error sending control msg in PANTILT_RESET cmd\n");
+                return retval;
+            }
+            
+        break;
         /*
-        case IOCTL_GET:
+        case USB_CAM_IOCTL_GET:
             unsigned char request = 0;
 
             printk(KERN_WARNING"- GET command received\n");
