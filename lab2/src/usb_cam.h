@@ -1,6 +1,7 @@
 #ifndef USB_CAM_H_
 #define USB_CAM_H_
 
+#include <asm/ioctl.h>
 // -- IOCTLs --
 // Mostly from docs and notes
 

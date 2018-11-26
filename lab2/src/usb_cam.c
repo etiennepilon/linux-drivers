@@ -15,7 +15,6 @@
 #include <linux/device.h>
 #include <asm/atomic.h>
 #include <asm/uaccess.h>
-#include <uapi/asm-generic/ioctl.h>
 #include <uapi/asm-generic/int-ll64.h>
 #include <linux/usb.h>
 #include <linux/completion.h>
@@ -79,7 +78,7 @@ MODULE_DEVICE_TABLE(usb, usb_cam_table);
 
 // driver
 static struct usb_driver usb_cam_driver = {
-	.name       = "usbcam",
+	.name       = "etsele_cdev",
 	.id_table   = usb_cam_table,
 	.probe      = usb_cam_probe,
 	.disconnect = usb_cam_disconnect,
@@ -87,7 +86,7 @@ static struct usb_driver usb_cam_driver = {
 
 // class
 static struct usb_class_driver usb_cam_class = {
-	.name       = "usb/usbcam%d",
+	.name       = "etsele_cdev%d",
 	.fops       = &usb_cam_fops,
 	.minor_base = MINOR_NUM,
 };
@@ -241,6 +240,18 @@ static int usb_cam_release (struct inode *inode, struct file *filp)
 static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count, loff_t *f_ops)
 {
 	int retval = 0;
+	struct usb_interface *intf;
+	struct usb_cam_dev* cam;
+	
+	printk(KERN_WARNING"USB CAM READ\n");
+	
+	intf = filp->private_data;
+	cam = usb_get_intfdata(intf);
+	
+	printk(KERN_WARNING"- Waiting for URB completion\n");
+	wait_for_completion(cam->urb_completed);
+	
+	
 	return retval;
 }
 
