@@ -29,6 +29,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 // -- Constants --
 #define MINOR_NUM 0
+#define NB_URBS 5
 
 // -- Prototypes --
 static int __init usb_cam_init(void);
@@ -41,8 +42,8 @@ static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count,
 static ssize_t usb_cam_write (struct file *filp, const char __user *ubuf, size_t count, loff_t *f_ops);
 static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long arg);
 // -- Private methods --
-// TODO
-
+int _my_urb_init(struct urb *urb, struct usb_interface *intf);
+static void _urb_callback(struct urb *urb);
 
 // -- Basic init & exit --
 module_init(usb_cam_init);
@@ -53,7 +54,7 @@ module_exit(usb_cam_exit);
 struct usb_cam_dev {
     struct usb_device *usb_dev;
     struct usb_interface *usb_cam_intf;
-    struct urb *usb_can_urbs[5];
+    struct urb *urbs[NB_URBS];
     atomic_t urb_counter;
 };
 
@@ -454,3 +455,75 @@ static long usb_cam_ioctl (struct file *filp, unsigned int cmd, unsigned long ar
     return retval;
 }
 
+
+// -- URB Functions --
+int _my_urb_init(struct urb *urb, struct usb_interface *intf) 
+{
+  int i, j, retval, nbPackets, myPacketSize, size, nbUrbs;
+  struct usb_host_interface *cur_altsetting ;
+  struct usb_endpoint_descriptor endpointDesc;
+  struct usb_cam_dev *usb_cam_dev;
+  struct usb_device *dev;
+  
+  cur_altsetting = intf->cur_altsetting;
+  endpointDesc = cur_altsetting->endpoint[0].desc;
+
+  usb_cam_dev = usb_get_intfdata(intf);
+  dev = usb_cam_dev->usb_dev;
+  
+  // -- Copy paste from Doc --
+  nbPackets = 40;  // The number of isochronous packets this urb should contain
+  myPacketSize = le16_to_cpu(endpointDesc.wMaxPacketSize);
+  size = myPacketSize * nbPackets;
+  nbUrbs = NB_URBS;
+
+  for (i = 0; i < nbUrbs; ++i)
+  {
+    usb_free_urb(usb_cam_dev->urbs[i]);
+    usb_cam_dev->urbs[i] = usb_alloc_urb(nbPackets, GFP_ATOMIC);
+    if (usb_cam_dev->urbs[i] == NULL)
+    {
+      printk(KERN_ERR "USB CAM URB INIT - Error allocating urb memory\n");
+      return -ENOMEM;
+    }
+    // Error in doc: usb_buffer_alloc => usb_alloc_coherent
+    usb_cam_dev->urbs[i]->transfer_buffer = usb_alloc_coherent(
+    		dev, size, GFP_KERNEL, &usb_cam_dev->urbs[i]->transfer_dma);
+    if (usb_cam_dev->urbs[i]->transfer_buffer == NULL)
+    {
+      printk(KERN_ERR "USB CAM URB INIT - Error allocating urb DMA\n");
+      usb_free_coherent(
+    		  dev, size, &endpointDesc.bEndpointAddress, usb_cam_dev->urbs[i]->transfer_dma);
+      return -ENOMEM;
+    }
+
+    usb_cam_dev->urbs[i]->dev = dev;
+    usb_cam_dev->urbs[i]->context = usb_cam_dev;
+    usb_cam_dev->urbs[i]->pipe = usb_rcvisocpipe(dev, endpointDesc.bEndpointAddress);
+    usb_cam_dev->urbs[i]->transfer_flags = URB_ISO_ASAP | URB_NO_TRANSFER_DMA_MAP;
+    usb_cam_dev->urbs[i]->interval = endpointDesc.bInterval;
+    usb_cam_dev->urbs[i]->complete = _urb_callback;
+    usb_cam_dev->urbs[i]->number_of_packets = nbPackets;
+    usb_cam_dev->urbs[i]->transfer_buffer_length = size;
+
+    for (j = 0; j < nbPackets; ++j) 
+    {
+    	usb_cam_dev->urbs[i]->iso_frame_desc[j].offset = j * myPacketSize;
+    	usb_cam_dev->urbs[i]->iso_frame_desc[j].length = myPacketSize;
+    }
+  }
+
+  for(i = 0; i < nbUrbs; ++i)
+  {
+    if ((retval = usb_submit_urb(usb_cam_dev->urbs[i], GFP_ATOMIC)) < 0)
+    {
+      printk(KERN_ERR "USB CAM URB INIT - Error submitting urb\n");
+      return retval;
+    }
+  }
+  return 0;
+}
+
+static void _urb_callback(struct urb *urb)
+{
+}
