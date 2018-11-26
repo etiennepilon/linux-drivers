@@ -55,6 +55,7 @@ struct usb_cam_dev {
     struct usb_device *usb_dev;
     struct usb_interface *usb_cam_intf;
     struct urb *urbs[NB_URBS];
+    struct completion *urb_completed;
     atomic_t urb_counter;
 };
 
@@ -176,6 +177,16 @@ static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id
 		}
 		atomic_set(&my_usb_dev->urb_counter, 1);
 		usb_set_interface(my_usb_dev->usb_dev, 1, 4);
+		// -- URB Synchronization stuff --
+		// TODO: Validate if this is necessary. It seems to lock my kernel when I don't do it.
+		my_usb_dev->urb_completed = (struct completion *) kmalloc(sizeof(struct completion), GFP_KERNEL);
+		init_completion(my_usb_dev->urb_completed);
+		if(my_usb_dev->urb_completed == NULL)
+		{
+			printk(KERN_ERR"- could not init completion event\n");
+			return -ENOMEM;
+		}
+		my_usb_dev->urb_counter = (atomic_t) ATOMIC_INIT(0);
 		printk(KERN_WARNING"- completed probe routine");
 	}
 	else
@@ -482,6 +493,7 @@ int _my_urb_init(struct urb *urb, struct usb_interface *intf)
   for (i = 0; i < nbUrbs; ++i)
   {
     usb_free_urb(usb_cam_dev->urbs[i]);
+    // GFP_ATOMIC: We don't want URB allocation
     usb_cam_dev->urbs[i] = usb_alloc_urb(nbPackets, GFP_ATOMIC);
     if (usb_cam_dev->urbs[i] == NULL)
     {
