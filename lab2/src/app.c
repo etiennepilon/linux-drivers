@@ -67,11 +67,14 @@ int main(int argc, char* argv[])
 			printf("Error: Can't open picture file\n");
 			return 0;
 		}
+		ioctl(usb_fd, USB_CAM_IOCTL_PANTILT_RESET);
+		sleep(2);
 		retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMON);
 		if (retval < 0) goto out;
+		sleep(2);
 		retval = ioctl(usb_fd, USB_CAM_IOCTL_GRAB);
 		if (retval < 0) goto out;
-		//take_picture(usb_fd, pic_fd);
+		take_picture(usb_fd, pic_fd);
 		retval = ioctl(usb_fd, USB_CAM_IOCTL_STREAMOFF);
 out:
 		fclose(pic_fd);
