@@ -147,7 +147,8 @@ static int usb_cam_probe (struct usb_interface *intf, const struct usb_device_id
 	else
 	{
 		printk(KERN_WARNING"- unsupported interface class detected: class value %x\n", intf->altsetting->desc.bInterfaceClass);
-		return -1;
+        return 0;
+//return -1;
 	}
 	if (streaming_intf_detected)
 	{
@@ -238,6 +239,7 @@ static int usb_cam_release (struct inode *inode, struct file *filp)
 	return retval;
 }
 
+/*
 static void _clear_urbs(struct usb_interface *intf)
 {
 	int i = 0;
@@ -252,7 +254,7 @@ static void _clear_urbs(struct usb_interface *intf)
 				cam->urbs[i]->transfer_dma);
 		usb_free_urb(cam->urbs[i]);
 	}
-}
+}*/
 
 static ssize_t usb_cam_read (struct file *filp, char __user *ubuf, size_t count, loff_t *f_ops)
 {
@@ -638,7 +640,7 @@ static void _urb_callback(struct urb *urb)
 	void * mem;
 	struct completion* urb_completed;
 	
-	printk(KERN_WARNING"REceived URB CB");
+	//printk(KERN_WARNING"REceived URB CB");
 	if(urb->status == 0){
 		
 		for (i = 0; i < urb->number_of_packets; ++i) {
